@@ -3,21 +3,29 @@ name: Make video
 on:
   workflow_dispatch:
     inputs:
+      topic:
+        description: "Topic. For several videos separate with ; (needs GEMINI_API_KEY secret)"
+        required: false
       script:
-        description: "Script JSON to render"
+        description: "OR a script file to render (used when topic is empty)"
         default: "scripts/ramadan.json"
         required: false
-      topic:
-        description: "OPTIONAL: topic to auto-write a script with Gemini (needs GEMINI_API_KEY secret). Overrides the script above."
+      watermark:
+        description: "Handle shown at the bottom of the video"
+        default: "yourhandle"
+        required: false
+      voice:
+        description: "Voice: en-US-GuyNeural, en-US-AndrewNeural, en-US-ChristopherNeural, en-GB-RyanNeural"
+        default: "en-US-GuyNeural"
         required: false
 
 permissions:
-  contents: write   # needed to attach the video to a Release
+  contents: write   # needed to attach videos to a Release
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -31,30 +39,49 @@ jobs:
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
           pip install edge-tts pillow numpy
 
-      - name: Write script (optional) and render
+      - name: Generate and render
         env:
-          TOPIC: ${{ inputs.topic }}
+          TOPICS: ${{ inputs.topic }}
           SCRIPT_IN: ${{ inputs.script }}
+          WATERMARK: ${{ inputs.watermark }}
+          VOICE: ${{ inputs.voice }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          if [ -n "$TOPIC" ]; then
-            python reel.py generate "$TOPIC" scripts/generated.json
-            S=scripts/generated.json
+          set -e
+          mkdir -p out
+          if [ -n "$TOPICS" ]; then
+            i=0
+            IFS=';' read -ra LIST <<< "$TOPICS"
+            for T in "${LIST[@]}"; do
+              T="$(echo "$T" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+              [ -z "$T" ] && continue
+              i=$((i+1))
+              echo "=== Video $i: $T ==="
+              python reel.py generate "$T" "out/script-$i.json"
+              python reel.py render "out/script-$i.json" "out/video-$i.mp4"
+              mv out/notes.md "out/notes-$i.md"
+              sleep 5
+            done
           else
-            S="${SCRIPT_IN:-scripts/ramadan.json}"
+            python reel.py render "${SCRIPT_IN:-scripts/ramadan.json}" out/video-1.mp4
+            mv out/notes.md out/notes-1.md
           fi
-          python reel.py render "$S" out/video.mp4
 
       - name: Save as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: video
+          name: videos
           path: out/
 
-      - name: Publish as a Release (easy to download on phone)
+      - name: Publish Releases (easy to download on phone)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "video-${{ github.run_number }}" out/video.mp4 \
-            --title "Video #${{ github.run_number }}" \
-            --notes-file out/notes.md
+          for V in out/video-*.mp4; do
+            N="${V##*/video-}"; N="${N%.mp4}"
+            FILES="$V"
+            [ -f "out/script-$N.json" ] && FILES="$FILES out/script-$N.json"
+            gh release create "video-${{ github.run_number }}-$N" $FILES \
+              --title "Video ${{ github.run_number }}-$N" \
+              --notes-file "out/notes-$N.md"
+          done
