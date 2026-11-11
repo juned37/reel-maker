@@ -1,5 +1,7 @@
+
 import json
 import sys
+import time
 
 from pathlib import Path
 
@@ -15,8 +17,9 @@ def prepare(script_path):
     )
 
     credits = []
+    scenes = data.get("scenes", [])
 
-    for number, scene in enumerate(data.get("scenes", []), 1):
+    for number, scene in enumerate(scenes, 1):
 
         query = str(
             scene.get("visual_query", "")
@@ -26,10 +29,25 @@ def prepare(script_path):
             scene["asset_status"] = "no_query_art_fallback"
             continue
 
-        asset = download_image(
-            query,
-            cache_name=f"scene-{number}-{query}"
+        print(
+            f"Preparing asset {number}/{len(scenes)}: {query}"
         )
+
+        try:
+
+            asset = download_image(
+                query,
+                cache_name=f"scene-{number}-{query}"
+            )
+
+        except Exception as exc:
+
+            print(
+                f"Asset preparation failed for scene "
+                f"{number}: {exc}"
+            )
+
+            asset = None
 
         if asset:
 
@@ -46,10 +64,21 @@ def prepare(script_path):
                 )
             }
 
+            scene["asset_status"] = "downloaded"
             credits.append(asset)
 
         else:
+
+            scene.pop("image", None)
             scene["asset_status"] = "not_found_art_fallback"
+
+            print(
+                f"No image available for scene {number}. "
+                "The renderer will use its illustration fallback."
+            )
+
+        # Avoid sending requests too quickly.
+        time.sleep(1.5)
 
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -59,6 +88,12 @@ def prepare(script_path):
     write_credits(
         credits,
         path.parent / "asset-credits.md"
+    )
+
+    print(
+        f"Asset preparation complete: "
+        f"{len(credits)} images downloaded, "
+        f"{len(scenes) - len(credits)} scenes using fallback."
     )
 
     return data
