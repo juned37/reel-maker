@@ -213,7 +213,7 @@ Rules:
 """
 
 def _gemini(prompt, key):
-    models = [m for m in (os.environ.get("GEMINI_MODEL"), "gemini-2.5-flash", "gemini-flash-latest") if m]; last = "no response"
+    models = [m for m in (os.environ.get("GEMINI_MODEL"), "gemini-2.8-flash", "gemini-flash-latest") if m]; last = "no response"
     for m in models:
         for attempt in range(3):
             try:
