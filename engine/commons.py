@@ -1,6 +1,10 @@
+
 import html
 import json
+import os
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -9,13 +13,95 @@ from pathlib import Path
 
 API = "https://commons.wikimedia.org/w/api.php"
 
+# Set WIKIMEDIA_CONTACT as a GitHub Actions variable if you
+# want to include a project contact address in the User-Agent.
+CONTACT = os.getenv("WIKIMEDIA_CONTACT", "").strip()
+
 USER_AGENT = (
-    "ReelMakerDocumentary/1.0 "
-    "(educational documentary project)"
+    "ReelMakerDocumentary/1.1 "
+    "(educational documentary asset downloader)"
+    + (f" ({CONTACT})" if CONTACT else "")
 )
+
+RATE_LIMITED_UNTIL = 0
+
+
+def _request(url, timeout=35, attempts=3):
+
+    global RATE_LIMITED_UNTIL
+
+    if time.time() < RATE_LIMITED_UNTIL:
+        return None
+
+    for attempt in range(attempts):
+
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": USER_AGENT}
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=timeout
+            ) as response:
+                return response.read()
+
+        except urllib.error.HTTPError as exc:
+
+            if exc.code == 429:
+
+                retry_after = exc.headers.get("Retry-After", "")
+
+                try:
+                    wait = min(60, max(5, int(retry_after)))
+                except (TypeError, ValueError):
+                    wait = min(60, 10 * (2 ** attempt))
+
+                print(
+                    f"Wikimedia rate limit reached. "
+                    f"Retrying in {wait} seconds..."
+                )
+
+                if attempt == attempts - 1:
+                    RATE_LIMITED_UNTIL = time.time() + 120
+                    print(
+                        "Wikimedia is temporarily unavailable. "
+                        "Using illustration fallbacks."
+                    )
+                    return None
+
+                time.sleep(wait)
+
+            elif exc.code in (500, 502, 503, 504):
+
+                if attempt == attempts - 1:
+                    print(
+                        f"Wikimedia server error: HTTP {exc.code}"
+                    )
+                    return None
+
+                time.sleep(2 ** attempt)
+
+            else:
+                print(f"Wikimedia request failed: HTTP {exc.code}")
+                return None
+
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+
+            if attempt == attempts - 1:
+                print(f"Wikimedia connection failed: {exc}")
+                return None
+
+            time.sleep(2 ** attempt)
+
+    return None
 
 
 def search_images(query, limit=8):
+
+    if time.time() < RATE_LIMITED_UNTIL:
+        return []
 
     params = {
         "action": "query",
@@ -31,13 +117,16 @@ def search_images(query, limit=8):
 
     url = API + "?" + urllib.parse.urlencode(params)
 
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": USER_AGENT}
-    )
+    payload = _request(url)
 
-    with urllib.request.urlopen(request, timeout=35) as response:
-        data = json.load(response)
+    if not payload:
+        return []
+
+    try:
+        data = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        print("Wikimedia returned an invalid JSON response.")
+        return []
 
     results = []
 
@@ -101,6 +190,7 @@ def download_image(
     except (OSError, ValueError):
         index = {}
 
+    # Reuse previously downloaded images.
     if slug in index:
 
         cached = Path(index[slug].get("path", ""))
@@ -108,7 +198,13 @@ def download_image(
         if cached.is_file():
             return index[slug]
 
+    if time.time() < RATE_LIMITED_UNTIL:
+        return None
+
     for item in search_images(query, 10):
+
+        if time.time() < RATE_LIMITED_UNTIL:
+            break
 
         suffix = Path(
             urllib.parse.urlparse(item["url"]).path
@@ -121,13 +217,13 @@ def download_image(
 
         try:
 
-            request = urllib.request.Request(
+            payload = _request(
                 item["url"],
-                headers={"User-Agent": USER_AGENT}
+                timeout=60
             )
 
-            with urllib.request.urlopen(request, timeout=60) as response:
-                payload = response.read()
+            if not payload:
+                continue
 
             if len(payload) < 2048:
                 continue
@@ -152,7 +248,13 @@ def download_image(
 
             return record
 
-        except Exception:
+        except Exception as exc:
+
+            print(
+                f"Could not download Wikimedia image "
+                f"for '{query}': {exc}"
+            )
+
             target.unlink(missing_ok=True)
 
     return None
