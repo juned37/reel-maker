@@ -1,97 +1,66 @@
-"""Install a cinematic still-image stage into the existing reel.py."""
+
+#!/usr/bin/env python3
+"""Upgrade the existing Reel Maker renderer safely."""
 
 from pathlib import Path
 import shutil
 
-
-path = Path("reel.py")
-
-if not path.exists():
-    raise SystemExit(
-        "Run this script from the reel-maker root; reel.py was not found."
-    )
-
-source = path.read_text(encoding="utf-8")
-
-if "CINEMATIC_IMAGE_LAYER" in source:
-    print("Cinematic image layer already installed.")
-    raise SystemExit(0)
-
-backup = Path("reel.py.before-cinematic-upgrade.bak")
-
-if not backup.exists():
-    shutil.copy2(path, backup)
+ROOT = Path(__file__).resolve().parent
+REEL = ROOT / "reel.py"
+ART = ROOT / "art.py"
+MARKER = "REEL_MAKER_CINEMATIC_IMAGE_LAYER"
 
 
-source = source.replace(
-    "from PIL import Image, ImageDraw",
-    "from PIL import Image, ImageDraw\n\n# CINEMATIC_IMAGE_LAYER"
-)
+ART_HELPERS = '''
+
+# REEL_MAKER_CINEMATIC_IMAGE_LAYER
+
+def load_scene_image(scene):
+    """Load an optional image for a scene."""
+    image_path = scene.get("image")
+
+    if not image_path:
+        return None
+
+    path = Path(image_path)
+
+    if not path.is_absolute():
+        path = Path.cwd() / path
+
+    try:
+        with Image.open(path) as source:
+            return source.convert("RGB")
+    except (OSError, ValueError) as exc:
+        print(f"Warning: cannot load image {path}: {exc}")
+        return None
 
 
-anchor = "def render(script_path, out_path, provider):"
-
-
-helpers = """
-def _load_scene_images(scenes):
-
-    loaded = []
-
-    for scene in scenes:
-
-        image_path = scene.get("image")
-
-        try:
-
-            loaded.append(
-                Image.open(image_path).convert("RGB")
-                if image_path and Path(image_path).is_file()
-                else None
-            )
-
-        except Exception as exc:
-
-            print(
-                f"  warning: could not load image {image_path}: {exc}",
-                file=sys.stderr
-            )
-
-            loaded.append(None)
-
-    return loaded
-
-
-def _cinematic_stage(frame, image, progress, scene):
-
+def draw_cinematic_image(frame, image, progress, scene=None):
+    """Draw a slowly moving historical image."""
     if image is None:
         return
 
-    box_w, box_h = 920, 640
+    scene = scene or {}
 
-    iw, ih = image.size
+    box_w, box_h = 920, 610
+    image_w, image_h = image.size
+
+    if image_w <= 0 or image_h <= 0:
+        return
 
     cover = max(
-        box_w / iw,
-        box_h / ih
+        box_w / image_w,
+        box_h / image_h
     )
 
-    zoom = 1.04 + 0.075 * min(
-        max(progress, 0.0),
-        1.0
-    )
+    progress = max(0.0, min(float(progress), 1.0))
+    zoom = 1.035 + 0.065 * progress
 
-    rw = max(
-        box_w,
-        int(iw * cover * zoom)
-    )
-
-    rh = max(
-        box_h,
-        int(ih * cover * zoom)
-    )
+    resized_w = max(box_w, int(image_w * cover * zoom))
+    resized_h = max(box_h, int(image_h * cover * zoom))
 
     resized = image.resize(
-        (rw, rh),
+        (resized_w, resized_h),
         Image.Resampling.LANCZOS
     )
 
@@ -99,126 +68,154 @@ def _cinematic_stage(frame, image, progress, scene):
         scene.get("camera", "slow_push")
     ).lower()
 
-    cx = (
-        0.35 if "left" in camera
-        else 0.65 if "right" in camera
-        else 0.50
-    )
+    if "left" in camera:
+        center_x = 0.38 + 0.08 * progress
+    elif "right" in camera:
+        center_x = 0.62 - 0.08 * progress
+    else:
+        center_x = 0.50
 
-    cy = 0.48 + 0.04 * min(
-        max(progress, 0.0),
-        1.0
-    )
-
-    max_x = rw - box_w
-    max_y = rh - box_h
-
-    x = int(
-        max_x * min(
-            max(cx + (progress - 0.5) * 0.10, 0.0),
-            1.0
-        )
-    )
-
-    y = int(
-        max_y * min(
-            max(cy, 0.0),
-            1.0
-        )
-    )
+    left = int(max(0, resized_w - box_w) * center_x)
+    top = int(max(0, resized_h - box_h) * 0.48)
 
     crop = resized.crop(
-        (x, y, x + box_w, y + box_h)
+        (left, top, left + box_w, top + box_h)
     )
 
-    crop = Image.blend(
-        crop,
-        Image.new(
-            "RGB",
-            crop.size,
-            (22, 18, 15)
-        ),
-        0.10
-    )
+    shade = Image.new("RGB", crop.size, (24, 20, 16))
+    crop = Image.blend(crop, shade, 0.08)
 
+    fade = min(1.0, progress * 5.0)
     mask = Image.new(
         "L",
         (box_w, box_h),
-        0
+        int(255 * fade)
     )
 
-    ImageDraw.Draw(mask).rounded_rectangle(
-        (0, 0, box_w - 1, box_h - 1),
-        radius=28,
-        fill=255
-    )
-
-    fade = min(
-        1.0,
-        max(0.0, progress * 5.0)
-    )
-
-    if fade < 0.999:
-        mask = mask.point(
-            lambda value: int(value * fade)
-        )
-
-    frame.paste(
-        crop,
-        (80, 470),
-        mask
-    )
+    x0, y0 = 80, 485
+    frame.paste(crop, (x0, y0), mask)
 
     ImageDraw.Draw(frame).rounded_rectangle(
-        (80, 470, 1000, 1110),
-        radius=28,
-        outline=(176, 128, 36),
+        (x0, y0, x0 + box_w, y0 + box_h),
+        radius=24,
+        outline=GOLD,
         width=3
     )
+'''
 
 
-"""
+def replace_once(source, old, new, description):
+    if old not in source:
+        raise RuntimeError(
+            f"Could not locate {description} in the original file."
+        )
+
+    return source.replace(old, new, 1)
 
 
-if anchor not in source:
-    raise SystemExit(
-        "Could not locate render() function."
+def main():
+
+    if not REEL.is_file() or not ART.is_file():
+        raise SystemExit(
+            "Place apply_changes.py beside reel.py and art.py."
+        )
+
+    reel_source = REEL.read_text(encoding="utf-8")
+    art_source = ART.read_text(encoding="utf-8")
+
+    if MARKER in reel_source and MARKER in art_source:
+        print("Cinematic upgrade is already installed.")
+        return
+
+    # Add image helpers without removing existing illustrations.
+    if MARKER not in art_source:
+
+        expected = (
+            "from PIL import Image, ImageDraw, ImageFilter, ImageFont"
+        )
+
+        if expected not in art_source:
+            raise RuntimeError("Unexpected art.py imports.")
+
+        art_source = (
+            art_source.rstrip()
+            + "\n"
+            + ART_HELPERS
+            + "\n"
+        )
+
+    # Allow more scenes in the existing sanitizer.
+    reel_source = replace_once(
+        reel_source,
+        '(s.get("scenes") or [])[:14]',
+        '(s.get("scenes") or [])[:22]',
+        "scene limit"
     )
 
-source = source.replace(
-    anchor,
-    helpers + anchor,
-    1
-)
-
-
-old = (
-    'work = Path(tempfile.mkdtemp()); '
-    'scenes = script["scenes"]; timeline = []; wavs = []'
-)
-
-new = (
-    old +
-    '\n    scene_images = _load_scene_images(scenes)'
-)
-
-if old not in source:
-    raise SystemExit(
-        "Could not locate scene initialization."
+    # Preserve documentary metadata through sanitization.
+    old_append = (
+        '        out.append({"narration": nar, '
+        '"clear": clear, "show": fix + cen})'
     )
 
-source = source.replace(
-    old,
-    new,
-    1
-)
+    new_append = '''        clean_scene = {
+            "narration": nar,
+            "clear": clear,
+            "show": fix + cen
+        }
 
+        for key in (
+            "image",
+            "visual_query",
+            "camera",
+            "transition",
+            "image_credit",
+            "source_notes",
+            "asset_status"
+        ):
+            if key in sc:
+                clean_scene[key] = sc[key]
 
-old_loop = "t = k / FPS; fr = base.copy()"
+        out.append(clean_scene)'''
 
+    reel_source = replace_once(
+        reel_source,
+        old_append,
+        new_append,
+        "scene metadata"
+    )
 
-new_loop = old_loop + """
-        # CINEMATIC_IMAGE_LAYER
+    # Load images once before video rendering.
+    setup = (
+        'work = Path(tempfile.mkdtemp()); scenes = script["scenes"]; '
+        'timeline = []; wavs = []'
+    )
+
+    reel_source = replace_once(
+        reel_source,
+        setup,
+        setup
+        + "\n    scene_images = [load_scene_image(sc) for sc in scenes]",
+        "renderer setup"
+    )
+
+    # Do not overlay fallback drawings on downloaded photographs.
+    visual_loop = '        for spec in sc.get("show", []):\n'
+
+    reel_source = replace_once(
+        reel_source,
+        visual_loop,
+        '        if sc.get("image"):\n'
+        '            continue\n'
+        + visual_loop,
+        "visual loop"
+    )
+
+    # Animate the image belonging to the active scene.
+    frame_line = "        t = k / FPS; fr = base.copy()\n"
+
+    frame_code = '''        t = k / FPS; fr = base.copy()
+
         active_scene = 0
 
         while (
@@ -227,49 +224,77 @@ new_loop = old_loop + """
         ):
             active_scene += 1
 
-        active_tl = timeline[active_scene]
-        active_data = scenes[active_scene]
+        active_timeline = timeline[active_scene]
 
-        span = max(
+        duration = max(
             0.1,
-            active_tl["t1"] - active_tl["t0"]
+            active_timeline["t1"] - active_timeline["t0"]
         )
 
         progress = min(
             1.0,
             max(
                 0.0,
-                (t - active_tl["t0"]) / span
+                (t - active_timeline["t0"]) / duration
             )
         )
 
-        _cinematic_stage(
+        draw_cinematic_image(
             fr,
             scene_images[active_scene],
             progress,
-            active_data
+            scenes[active_scene]
         )
-"""
+'''
 
-
-if old_loop not in source:
-    raise SystemExit(
-        "Could not locate frame loop."
+    reel_source = replace_once(
+        reel_source,
+        frame_line,
+        frame_code,
+        "video frame loop"
     )
 
-source = source.replace(
-    old_loop,
-    new_loop,
-    1
-)
+    # Update the existing short-form prompt.
+    reel_source = reel_source.replace(
+        "35-60 second faint-minimal animated explainer video",
+        "2-5 minute cinematic documentary"
+    )
+
+    reel_source = reel_source.replace(
+        "6 to 9 scenes, about 90 to 130 spoken words in total.",
+        "10 to 22 scenes, with narration matching the requested duration."
+    )
+
+    reel_source = replace_once(
+        reel_source,
+        "from art import *",
+        "from art import *  # " + MARKER,
+        "renderer marker"
+    )
+
+    # Verify syntax before changing the original files.
+    compile(art_source, str(ART), "exec")
+    compile(reel_source, str(REEL), "exec")
+
+    # Create backups.
+    art_backup = ROOT / "art.py.before-cinematic.bak"
+    reel_backup = ROOT / "reel.py.before-cinematic.bak"
+
+    if not art_backup.exists():
+        shutil.copy2(ART, art_backup)
+
+    if not reel_backup.exists():
+        shutil.copy2(REEL, reel_backup)
+
+    # Write updated files.
+    ART.write_text(art_source, encoding="utf-8")
+    REEL.write_text(reel_source, encoding="utf-8")
+
+    print("Successfully updated reel.py and art.py.")
+    print("Backups:")
+    print(art_backup.name)
+    print(reel_backup.name)
 
 
-path.write_text(
-    source,
-    encoding="utf-8"
-)
-
-print(
-    "Installed. Original backup:",
-    backup
-)
+if __name__ == "__main__":
+    main()
