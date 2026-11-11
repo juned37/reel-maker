@@ -1,0 +1,19 @@
+{
+  "title": ["Why does Ramadan move?", "It follows the moon, not the sun."],
+  "watermark": "yourhandle",
+  "voice": "en-US-GuyNeural",
+  "claims_to_verify": [
+    "The Islamic (Hijri) calendar is lunar.",
+    "A lunar year is about 354 days; a solar year is about 365 days.",
+    "So Ramadan shifts about 11 days earlier each year on the Gregorian calendar.",
+    "Ramadan cycles through all seasons over roughly 33 years."
+  ],
+  "scenes": [
+    {"narration": "The Islamic calendar follows the moon.", "show": ["crescent"]},
+    {"narration": "Each month begins when the new moon is sighted."},
+    {"narration": "A lunar year is about three hundred fifty-four days. A solar year is about three hundred sixty-five.", "clear": true, "show": ["text:354|lunar days@left", "text:365|solar days@right"]},
+    {"narration": "That is roughly eleven days shorter.", "clear": true, "show": ["calendar"]},
+    {"narration": "So Ramadan arrives about eleven days earlier every year.", "show": []},
+    {"narration": "And over about thirty-three years, it travels through every season.", "clear": true, "show": ["sun@right", "crescent@left"]}
+  ]
+}
