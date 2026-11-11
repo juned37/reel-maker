@@ -212,24 +212,114 @@ Rules:
 - Only widely agreed, verifiable facts. No religious rulings, no sectarian or political claims, no quoting scripture. If unsure, leave it out.
 """
 
+
 def _gemini(prompt, key):
-    models = [m for m in (os.environ.get("GEMINI_MODEL"), "gemini-3.8-flash", "gemini-flash-latest") if m]; last = "no response"
-    for m in models:
+    """
+    Gemini script generation with automatic model fallback,
+    retries, and exponential backoff.
+    """
+    # Preferred free-tier models, in priority order.
+    preferred = os.environ.get("GEMINI_MODEL")
+    models = list(dict.fromkeys([
+        preferred or "gemini-2.5-flash-lite",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-flash-latest"
+    ]))
+    last_error = "No response received"
+    for model in models:
+        print(f"\nTrying Gemini model: {model}", file=sys.stderr)
         for attempt in range(3):
             try:
-                body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}}
-                req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent",
-                                             json.dumps(body).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
-                with urllib.request.urlopen(req, timeout=120) as r: resp = json.load(r)
-                return resp["candidates"][0]["content"]["parts"][0]["text"]
+                body = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {"text": prompt}
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "temperature": 0.7
+                    }
+                }
+                url = (
+                    "https://generativelanguage.googleapis.com/"
+                    f"v1beta/models/{model}:generateContent"
+                )
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(body).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": key
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(
+                    req,
+                    timeout=120
+                ) as response:
+                    result = json.load(response)
+                # Extract generated JSON text.
+                candidates = result.get("candidates", [])
+                if not candidates:
+                    raise ValueError(
+                        f"{model}: No candidates returned: {result}"
+                    )
+                content = candidates[0].get("content", {})
+                parts = content.get("parts", [])
+                generated_text = "".join(
+                    part.get("text", "")
+                    for part in parts
+                ).strip()
+                if not generated_text:
+                    raise ValueError(
+                        f"{model}: Empty generated response"
+                    )
+                print(
+                    f"Successfully generated script using {model}",
+                    file=sys.stderr
+                )
+                return generated_text
             except urllib.error.HTTPError as e:
-                last = f"{m}: HTTP {e.code} {e.read().decode(errors='ignore')[:300]}"; print("  " + last, file=sys.stderr)
-                if e.code in (429, 500, 503): time.sleep(10 * (attempt + 1)); continue
+                error_body = e.read().decode(
+                    "utf-8", errors="ignore"
+                )[:500]
+                last_error = (
+                    f"{model}: HTTP {e.code} - {error_body}"
+                )
+                print(last_error, file=sys.stderr)
+                # Retry temporary capacity and quota errors.
+                if e.code in (429, 500, 502, 503, 504):
+                    if attempt < 2:
+                        wait = 5 * (2 ** attempt)
+                        print(
+                            f"Retrying {model} in {wait} seconds...",
+                            file=sys.stderr
+                        )
+                        time.sleep(wait)
+                        continue
+                    break
+                # Invalid model, invalid API key, etc.
                 break
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                ValueError
+            ) as e:
+                last_error = f"{model}: {e}"
+                print(last_error, file=sys.stderr)
+                if attempt < 2:
+                    time.sleep(3 * (attempt + 1))
             except Exception as e:
-                last = f"{m}: {e}"; print("  " + last, file=sys.stderr); time.sleep(4)
-    raise RuntimeError(f"Gemini request failed: {last}")
-
+                last_error = f"{model}: {e}"
+                print(last_error, file=sys.stderr)
+                break
+    raise RuntimeError(
+        f"All Gemini models failed. Last error: {last_error}"
+    )
 def generate(topic, out):
     key = os.environ.get("GEMINI_API_KEY") or sys.exit("GEMINI_API_KEY is not set (add it as a repo secret)")
     for attempt in range(2):
