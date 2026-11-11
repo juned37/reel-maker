@@ -6,10 +6,7 @@ from pathlib import Path
 from .commons import download_image, write_credits
 
 
-def prepare(
-    script_path,
-    output_dir="assets/images"
-):
+def prepare(script_path):
 
     path = Path(script_path)
 
@@ -19,22 +16,19 @@ def prepare(
 
     credits = []
 
-    for number, scene in enumerate(
-        data.get("scenes", []),
-        1
-    ):
+    for number, scene in enumerate(data.get("scenes", []), 1):
 
         query = str(
             scene.get("visual_query", "")
         ).strip()
 
         if not query:
+            scene["asset_status"] = "no_query_art_fallback"
             continue
 
         asset = download_image(
             query,
-            output_dir,
-            f"scene-{number}-{query}"
+            cache_name=f"scene-{number}-{query}"
         )
 
         if asset:
@@ -55,10 +49,7 @@ def prepare(
             credits.append(asset)
 
         else:
-
-            scene["asset_status"] = (
-                "not_found_use_art_fallback"
-            )
+            scene["asset_status"] = "not_found_art_fallback"
 
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
@@ -75,7 +66,7 @@ def prepare(
 
 if __name__ == "__main__":
 
-    if len(sys.argv) < 2:
+    if len(sys.argv) != 2:
         raise SystemExit(
             "Usage: python -m engine.prepare_assets scripts/file.json"
         )
