@@ -1,0 +1,60 @@
+name: Make video
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: "Script JSON to render"
+        default: "scripts/ramadan.json"
+        required: false
+      topic:
+        description: "OPTIONAL: topic to auto-write a script with Gemini (needs GEMINI_API_KEY secret). Overrides the script above."
+        required: false
+
+permissions:
+  contents: write   # needed to attach the video to a Release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          pip install edge-tts pillow numpy
+
+      - name: Write script (optional) and render
+        env:
+          TOPIC: ${{ inputs.topic }}
+          SCRIPT_IN: ${{ inputs.script }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -n "$TOPIC" ]; then
+            python reel.py generate "$TOPIC" scripts/generated.json
+            S=scripts/generated.json
+          else
+            S="${SCRIPT_IN:-scripts/ramadan.json}"
+          fi
+          python reel.py render "$S" out/video.mp4
+
+      - name: Save as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: out/
+
+      - name: Publish as a Release (easy to download on phone)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "video-${{ github.run_number }}" out/video.mp4 \
+            --title "Video #${{ github.run_number }}" \
+            --notes-file out/notes.md
