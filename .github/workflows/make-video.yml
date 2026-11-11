@@ -1,31 +1,55 @@
-name: Make video
+name: Make documentary video
 
 on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "Topic. For several videos separate with ; (needs GEMINI_API_KEY secret)"
+        description: "New documentary topic; leave blank to use selected JSON"
         required: false
+        type: string
+
       script:
-        description: "OR a script file to render (used when topic is empty)"
-        default: "scripts/ramadan.json"
+        description: "JSON script when topic is blank"
         required: false
-      watermark:
-        description: "Handle shown at the bottom of the video"
-        default: "yourhandle"
+        default: "scripts/world-before-islam.json"
+        type: string
+
+      minutes:
+        description: "Target duration"
         required: false
+        default: "3"
+        type: choice
+        options:
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+
       voice:
-        description: "Voice: en-US-GuyNeural, en-US-AndrewNeural, en-US-ChristopherNeural, en-GB-RyanNeural"
-        default: "en-US-GuyNeural"
+        description: "Narration voice"
         required: false
+        default: "en-US-GuyNeural"
+        type: choice
+        options:
+          - "en-US-GuyNeural"
+          - "en-US-AndrewNeural"
+          - "en-US-ChristopherNeural"
+          - "en-GB-RyanNeural"
+
+      watermark:
+        description: "Optional watermark"
+        required: false
+        default: ""
+        type: string
 
 permissions:
-  contents: write   # needed to attach videos to a Release
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+
     steps:
       - uses: actions/checkout@v4
 
@@ -37,51 +61,66 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
-          pip install edge-tts pillow numpy
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
 
-      - name: Generate and render
+      - name: Run tests
+        run: pytest -q
+
+      - name: Generate or select script
         env:
-          TOPICS: ${{ inputs.topic }}
+          TOPIC: ${{ inputs.topic }}
           SCRIPT_IN: ${{ inputs.script }}
-          WATERMARK: ${{ inputs.watermark }}
+          MINUTES: ${{ inputs.minutes }}
           VOICE: ${{ inputs.voice }}
+          WATERMARK: ${{ inputs.watermark }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p out
-          if [ -n "$TOPICS" ]; then
-            i=0
-            IFS=';' read -ra LIST <<< "$TOPICS"
-            for T in "${LIST[@]}"; do
-              T="$(echo "$T" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-              [ -z "$T" ] && continue
-              i=$((i+1))
-              echo "=== Video $i: $T ==="
-              python reel.py generate "$T" "out/script-$i.json"
-              python reel.py render "out/script-$i.json" "out/video-$i.mp4"
-              mv out/notes.md "out/notes-$i.md"
-              sleep 5
-            done
+
+          if [ -n "$TOPIC" ]; then
+            python reel.py generate "$TOPIC" out/documentary.json --minutes "$MINUTES"
+
+            python - <<'PY'
+          import json
+          import os
+
+          path = "out/documentary.json"
+
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+          data["voice"] = os.getenv("VOICE") or data.get("voice", "en-US-GuyNeural")
+          data["watermark"] = os.getenv("WATERMARK", "")
+
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          PY
+
+            SCRIPT_TO_RENDER="out/documentary.json"
+
           else
-            python reel.py render "${SCRIPT_IN:-scripts/ramadan.json}" out/video-1.mp4
-            mv out/notes.md out/notes-1.md
+            SCRIPT_TO_RENDER="${SCRIPT_IN:-scripts/world-before-islam.json}"
           fi
 
-      - name: Save as artifact
+          python -m engine.prepare_assets "$SCRIPT_TO_RENDER"
+
+          python reel.py render "$SCRIPT_TO_RENDER" out/documentary.mp4 --tts edge
+
+          cp "$SCRIPT_TO_RENDER" out/documentary-script.json
+
+          CREDITS="$(dirname "$SCRIPT_TO_RENDER")/asset-credits.md"
+
+          if [ -f "$CREDITS" ]; then
+            cp "$CREDITS" out/asset-credits.md
+          fi
+
+      - name: Upload video and supporting files
         uses: actions/upload-artifact@v4
         with:
-          name: videos
+          name: reel-maker-documentary
           path: out/
-
-      - name: Publish Releases (easy to download on phone)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for V in out/video-*.mp4; do
-            N="${V##*/video-}"; N="${N%.mp4}"
-            FILES="$V"
-            [ -f "out/script-$N.json" ] && FILES="$FILES out/script-$N.json"
-            gh release create "video-${{ github.run_number }}-$N" $FILES \
-              --title "Video ${{ github.run_number }}-$N" \
-              --notes-file "out/notes-$N.md"
-          done
+          if-no-files-found: error
