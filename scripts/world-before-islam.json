@@ -1,0 +1,163 @@
+
+{
+  "title": [
+    "The World Before Islam",
+    "Arabia and the Late Antique World"
+  ],
+  "watermark": "",
+  "voice": "en-US-GuyNeural",
+  "rate": "-3%",
+  "claims_to_verify": [
+    "The chronology and dating of late antique Arabian settlements and trade networks.",
+    "The religious diversity of the Arabian Peninsula before Islam.",
+    "The historical evidence for Byzantine and Sasanian influence in the region.",
+    "The dating and interpretation of South Arabian inscriptions.",
+    "The historical context of Mecca and western Arabian trade before Islam."
+  ],
+  "scenes": [
+    {
+      "narration": "Before the rise of Islam, the world was already connected by powerful kingdoms, ancient trade routes, religious communities and remarkable cities. Arabia stood between several of these worlds.",
+      "clear": true,
+      "show": ["globe", "text:Arabia|before Islam"],
+      "visual_query": "Arabian Peninsula Middle East physical relief map historical geography",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Opening geographical overview. Use a map rather than an imagined historical scene."
+    },
+    {
+      "narration": "To the west stood the Byzantine Empire, heir to the eastern Roman world. Its cities, churches, trade networks and political influence shaped the eastern Mediterranean.",
+      "clear": true,
+      "show": ["arches", "text:Byzantine Empire"],
+      "visual_query": "Byzantine late antique architecture mosaic church archaeological site",
+      "camera": "pan_left",
+      "transition": "crossfade",
+      "source_notes": "Use surviving architecture or museum mosaics as evidence of the period."
+    },
+    {
+      "narration": "To the east, the Sasanian Persian Empire ruled a powerful realm. Its influence extended across Mesopotamia and parts of the lands surrounding Arabia.",
+      "clear": true,
+      "show": ["globe", "text:Sasanian Persia"],
+      "visual_query": "Sasanian Persian silver coin museum collection late antiquity",
+      "camera": "pan_right",
+      "transition": "crossfade",
+      "source_notes": "Use an authenticated coin or museum artefact, not a fabricated royal portrait."
+    },
+    {
+      "narration": "Between these great powers were smaller kingdoms and communities. Their alliances, conflicts and trade helped connect Arabia with the wider region.",
+      "clear": true,
+      "show": ["scale", "text:Kingdoms and alliances"],
+      "visual_query": "Late antique Near East historical map Byzantine Sasanian frontier",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "A historical map can communicate political geography without inventing a battle scene."
+    },
+    {
+      "narration": "Arabia itself was not an empty desert. It contained settled towns, agricultural areas, pastoral communities and important routes linking the Mediterranean, Africa and Asia.",
+      "clear": true,
+      "show": ["figures:4", "text:Many ways of life"],
+      "visual_query": "Hegra Mada'in Salih Nabataean archaeological settlement Saudi Arabia",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use archaeological remains to show settlement and regional diversity."
+    },
+    {
+      "narration": "In the north, the Nabataeans left remarkable evidence of their skill in architecture and trade. Their rock-cut monuments at Petra and Hegra still survive.",
+      "clear": true,
+      "show": ["arches", "text:Nabataean heritage"],
+      "visual_query": "Petra Jordan Nabataean rock cut architecture archaeological site",
+      "camera": "pan_left",
+      "transition": "crossfade",
+      "source_notes": "Photographs of surviving Nabataean monuments."
+    },
+    {
+      "narration": "In southern Arabia, kingdoms such as Saba and Himyar developed centres of power. Inscriptions, buildings and other remains help historians study their societies.",
+      "clear": true,
+      "show": ["text:South Arabian kingdoms", "book"],
+      "visual_query": "ancient South Arabian Sabaean inscription stone museum",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use actual inscriptions and archaeological objects. Avoid treating every inscription as belonging to the same century."
+    },
+    {
+      "narration": "The south was also connected to the valuable trade in frankincense and other goods. Caravans and maritime routes carried products across the region.",
+      "clear": true,
+      "show": ["globe", "text:Trade routes"],
+      "visual_query": "ancient frankincense trade incense burner archaeological museum Arabia",
+      "camera": "pan_right",
+      "transition": "crossfade",
+      "source_notes": "Use museum artefacts related to incense and trade."
+    },
+    {
+      "narration": "Across the Red Sea, Arabia was connected to northeast Africa. Ships and ports helped move people, goods and ideas between neighbouring regions.",
+      "clear": true,
+      "show": ["globe", "text:Across the Red Sea"],
+      "visual_query": "Red Sea ancient maritime trade route historical map Arabia Africa",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Prefer a map or archaeological port evidence. Avoid unsupported depictions of particular voyages."
+    },
+    {
+      "narration": "Religion was also diverse. Jewish communities lived in parts of Arabia, Christian communities were present in several regions, and many people followed local polytheistic traditions.",
+      "clear": true,
+      "show": ["text:Religious diversity"],
+      "visual_query": "late antique Arabian Peninsula Jewish Christian religious archaeology inscription",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use relevant inscriptions, buildings or material evidence. Avoid suggesting all communities shared one belief."
+    },
+    {
+      "narration": "In the south, the Himyarite kingdom experienced important religious changes. In the north and surrounding regions, Christian communities were linked to wider networks of worship and learning.",
+      "clear": true,
+      "show": ["arches", "book"],
+      "visual_query": "late antique Himyarite South Arabian inscription Jewish history Yemen",
+      "camera": "pan_left",
+      "transition": "crossfade",
+      "source_notes": "The chronology and interpretation of Himyarite religious history require careful sourcing."
+    },
+    {
+      "narration": "The desert also shaped daily life. Water sources, seasonal movement and knowledge of the land were essential for communities travelling across difficult terrain.",
+      "clear": true,
+      "show": ["sun", "text:Life in the desert"],
+      "visual_query": "Arabian desert oasis ancient settlement archaeological landscape",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use real landscapes and archaeological sites, not staged images presented as historical photographs."
+    },
+    {
+      "narration": "Poetry and oral traditions held an important place in Arabian society. Language, memory, family ties and tribal relationships helped preserve identity and reputation.",
+      "clear": true,
+      "show": ["book", "text:Poetry and memory"],
+      "visual_query": "pre Islamic Arabic poetry manuscript Arabic calligraphy historical manuscript",
+      "camera": "pan_right",
+      "transition": "crossfade",
+      "source_notes": "Surviving manuscripts may be later copies. Do not label a later manuscript as a contemporary pre-Islamic document."
+    },
+    {
+      "narration": "Mecca, in western Arabia, was associated with the Kaaba and pilgrimage traditions. The details of its early history are discussed through religious reports and historical scholarship.",
+      "clear": true,
+      "show": ["kaaba", "text:Mecca"],
+      "visual_query": "Masjid al Haram Kaaba historical architecture archival photograph",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use respectful architectural imagery. Do not depict Prophet Muhammad ﷺ or claim that a modern photograph shows the pre-Islamic city."
+    },
+    {
+      "narration": "The wider world was changing through political rivalry, religious debate, commerce and cultural exchange. Arabia was part of this connected landscape, not separate from it.",
+      "clear": true,
+      "show": ["globe", "text:A connected world"],
+      "visual_query": "late antique world map Byzantine Sasanian Arabia trade routes",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Use a historically grounded map with clear period attribution."
+    },
+    {
+      "narration": "This was the world into which Islam would emerge in the seventh century. Understanding its geography, societies and beliefs helps us understand the historical setting of the beginning of Islam.",
+      "clear": true,
+      "show": ["crescent", "text:The beginning of a new era"],
+      "visual_query": "Arabian Peninsula seventh century historical map late antiquity",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "Closing map. Do not depict the Prophet ﷺ. Keep the chronology and religious framing respectful."
+    }
+  ]
+}
