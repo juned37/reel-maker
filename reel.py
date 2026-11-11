@@ -245,9 +245,48 @@ def _gemini(prompt, key):
                     }
                 }
                 url = (
+
+def _gemini(prompt, key):
+    """Generate JSON using current Gemini models with automatic fallback."""
+
+    preferred = os.environ.get("GEMINI_MODEL")
+
+    models = list(dict.fromkeys([
+        preferred,
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+    ]))
+
+    models = [model for model in models if model]
+
+    last_error = "No response received"
+
+    for model in models:
+        print(f"\nTrying Gemini model: {model}", file=sys.stderr)
+
+        for attempt in range(2):
+            try:
+                body = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {"text": prompt}
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "responseMimeType": "application/json",
+                        "temperature": 0.7
+                    }
+                }
+
+                url = (
                     "https://generativelanguage.googleapis.com/"
                     f"v1beta/models/{model}:generateContent"
                 )
+
                 req = urllib.request.Request(
                     url,
                     data=json.dumps(body).encode("utf-8"),
@@ -257,66 +296,78 @@ def _gemini(prompt, key):
                     },
                     method="POST"
                 )
+
                 with urllib.request.urlopen(
                     req,
                     timeout=120
                 ) as response:
                     result = json.load(response)
-                # Extract generated JSON text.
+
                 candidates = result.get("candidates", [])
+
                 if not candidates:
                     raise ValueError(
                         f"{model}: No candidates returned: {result}"
                     )
-                content = candidates[0].get("content", {})
-                parts = content.get("parts", [])
+
+                parts = candidates[0].get(
+                    "content", {}
+                ).get("parts", [])
+
                 generated_text = "".join(
                     part.get("text", "")
                     for part in parts
                 ).strip()
+
                 if not generated_text:
                     raise ValueError(
                         f"{model}: Empty generated response"
                     )
+
                 print(
-                    f"Successfully generated script using {model}",
+                    f"Successfully generated using {model}",
                     file=sys.stderr
                 )
+
                 return generated_text
-            except urllib.error.HTTPError as e:
-                error_body = e.read().decode(
+
+            except urllib.error.HTTPError as exc:
+                error_body = exc.read().decode(
                     "utf-8", errors="ignore"
-                )[:500]
+                )[:600]
+
                 last_error = (
-                    f"{model}: HTTP {e.code} - {error_body}"
+                    f"{model}: HTTP {exc.code} - {error_body}"
                 )
+
                 print(last_error, file=sys.stderr)
-                # Retry temporary capacity and quota errors.
-                if e.code in (429, 500, 502, 503, 504):
-                    if attempt < 2:
-                        wait = 5 * (2 ** attempt)
+
+                if exc.code == 404:
+                    break
+
+                if exc.code in (429, 500, 502, 503, 504):
+                    if attempt == 0:
+                        wait = 5
                         print(
                             f"Retrying {model} in {wait} seconds...",
                             file=sys.stderr
                         )
                         time.sleep(wait)
                         continue
-                    break
-                # Invalid model, invalid API key, etc.
+
                 break
+
             except (
                 urllib.error.URLError,
                 TimeoutError,
                 ValueError
-            ) as e:
-                last_error = f"{model}: {e}"
+            ) as exc:
+                last_error = f"{model}: {exc}"
                 print(last_error, file=sys.stderr)
-                if attempt < 2:
-                    time.sleep(3 * (attempt + 1))
-            except Exception as e:
-                last_error = f"{model}: {e}"
-                print(last_error, file=sys.stderr)
-                break
+
+                if attempt == 0:
+                    time.sleep(3)
+
     raise RuntimeError(
         f"All Gemini models failed. Last error: {last_error}"
     )
