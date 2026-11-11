@@ -1,3 +1,4 @@
+
 name: Make documentary video
 
 on:
@@ -15,7 +16,7 @@ on:
         type: string
 
       minutes:
-        description: "Target duration"
+        description: "Target duration for Gemini generation"
         required: false
         default: "3"
         type: choice
@@ -54,23 +55,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Install dependencies
+      - name: Install system and Python dependencies
         run: |
+          set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
+          sudo apt-get install -y \
+            ffmpeg \
+            espeak-ng \
+            fonts-dejavu-core
+
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
+      - name: Check required tools
+        run: |
+          set -euo pipefail
+
+          python --version
+          ffmpeg -version
+          ffprobe -version
+          espeak-ng --version
+
       - name: Run tests
-        run: python -m pytest -q
+        run: |
+          python -m pytest -q
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-      - name: Generate or select script
+      - name: Generate or select documentary script
         env:
           TOPIC: ${{ inputs.topic }}
           SCRIPT_IN: ${{ inputs.script }}
@@ -79,13 +98,22 @@ jobs:
           WATERMARK: ${{ inputs.watermark }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-
         run: |
           set -euo pipefail
+
           mkdir -p out
 
-          if [ -n "$TOPIC" ]; then
-            python reel.py generate "$TOPIC" out/documentary.json --minutes "$MINUTES"
+          if [[ -n "${TOPIC// /}" ]]; then
+
+            if [[ -z "${GEMINI_API_KEY:-}" ]]; then
+              echo "GEMINI_API_KEY is required when generating a new topic."
+              exit 1
+            fi
+
+            python reel.py generate \
+              "$TOPIC" \
+              out/documentary.json \
+              --minutes "$MINUTES"
 
             python - <<'PY'
           import json
@@ -93,33 +121,79 @@ jobs:
 
           path = "out/documentary.json"
 
-          with open(path, encoding="utf-8") as f:
-              data = json.load(f)
+          with open(path, encoding="utf-8") as file:
+              data = json.load(file)
 
-          data["voice"] = os.getenv("VOICE") or data.get("voice", "en-US-GuyNeural")
+          data["voice"] = (
+              os.getenv("VOICE")
+              or data.get("voice", "en-US-GuyNeural")
+          )
+
           data["watermark"] = os.getenv("WATERMARK", "")
 
-          with open(path, "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
+          with open(path, "w", encoding="utf-8") as file:
+              json.dump(data, file, ensure_ascii=False, indent=2)
           PY
 
             SCRIPT_TO_RENDER="out/documentary.json"
 
           else
+
             SCRIPT_TO_RENDER="${SCRIPT_IN:-scripts/world-before-islam.json}"
+
+            if [[ ! -f "$SCRIPT_TO_RENDER" ]]; then
+              echo "Script file not found: $SCRIPT_TO_RENDER"
+              exit 1
+            fi
+
           fi
+
+          echo "Selected script: $SCRIPT_TO_RENDER"
 
           python -m engine.prepare_assets "$SCRIPT_TO_RENDER"
 
-          python reel.py render "$SCRIPT_TO_RENDER" out/documentary.mp4 --tts edge
+          python reel.py render \
+            "$SCRIPT_TO_RENDER" \
+            out/documentary.mp4 \
+            --tts edge
 
           cp "$SCRIPT_TO_RENDER" out/documentary-script.json
 
           CREDITS="$(dirname "$SCRIPT_TO_RENDER")/asset-credits.md"
 
-          if [ -f "$CREDITS" ]; then
-            cp "$CREDITS" out/asset-credits.md
+          if [[ -f "$CREDITS" ]]; then
+            if [[ "$CREDITS" != "out/asset-credits.md" ]]; then
+              cp "$CREDITS" out/asset-credits.md
+            fi
           fi
+
+          NOTES="$(dirname "$SCRIPT_TO_RENDER")/render-notes.md"
+
+          if [[ -f "$NOTES" && "$NOTES" != "out/render-notes.md" ]]; then
+            cp "$NOTES" out/render-notes.md
+          fi
+
+      - name: Verify generated video
+        run: |
+          set -euo pipefail
+
+          test -s out/documentary.mp4
+          test -s out/documentary-script.json
+
+          ffprobe \
+            -v error \
+            -show_entries format=duration \
+            -of default=noprint_wrappers=1:nokey=1 \
+            out/documentary.mp4
+
+          ffprobe \
+            -v error \
+            -show_entries stream=codec_type,codec_name \
+            -of default=noprint_wrappers=1 \
+            out/documentary.mp4
+
+          echo "Generated files:"
+          ls -lh out/
 
       - name: Upload video and supporting files
         uses: actions/upload-artifact@v4
@@ -127,3 +201,4 @@ jobs:
           name: reel-maker-documentary
           path: out/
           if-no-files-found: error
+          retention-days: 14
