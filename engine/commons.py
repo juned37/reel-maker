@@ -1,62 +1,75 @@
-from __future__ import annotations
-
+import html
 import json
 import re
 import urllib.parse
 import urllib.request
+
 from pathlib import Path
 
+
 API = "https://commons.wikimedia.org/w/api.php"
-UA = "ReelMakerDocumentary/1.0 (educational video project)"
 
-
-def _api(params):
-    req = urllib.request.Request(
-        API + "?" + urllib.parse.urlencode(params),
-        headers={"User-Agent": UA}
-    )
-
-    with urllib.request.urlopen(req, timeout=30) as response:
-        return json.load(response)
+USER_AGENT = (
+    "ReelMakerDocumentary/1.0 "
+    "(educational documentary project)"
+)
 
 
 def search_images(query, limit=8):
-    data = _api({
+
+    params = {
         "action": "query",
         "format": "json",
         "generator": "search",
         "gsrsearch": f"filetype:bitmap {query}",
         "gsrnamespace": 6,
-        "gsrlimit": min(max(int(limit), 1), 20),
+        "gsrlimit": min(20, max(1, int(limit))),
         "prop": "imageinfo",
         "iiprop": "url|extmetadata",
         "iiurlwidth": 1800
-    })
+    }
 
-    found = []
+    url = API + "?" + urllib.parse.urlencode(params)
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": USER_AGENT}
+    )
+
+    with urllib.request.urlopen(request, timeout=35) as response:
+        data = json.load(response)
+
+    results = []
 
     for page in data.get("query", {}).get("pages", {}).values():
+
         info = (page.get("imageinfo") or [{}])[0]
-        meta = info.get("extmetadata") or {}
+        metadata = info.get("extmetadata") or {}
 
-        def field(key):
-            value = meta.get(key, {}).get("value", "")
-            return re.sub(r"<[^>]*>", " ", str(value)).strip()
+        def field(name):
 
-        url = info.get("thumburl") or info.get("url")
+            value = metadata.get(name, {}).get("value", "")
 
-        if url:
-            found.append({
-                "title": str(page.get("title", "")),
-                "url": str(url),
-                "source_url": str(info.get("descriptionurl", "")),
+            return re.sub(
+                r"<[^>]+>",
+                "",
+                html.unescape(str(value))
+            ).strip()
+
+        image_url = info.get("thumburl") or info.get("url")
+
+        if image_url:
+
+            results.append({
+                "title": page.get("title", ""),
+                "url": image_url,
+                "source_url": info.get("descriptionurl", ""),
                 "artist": field("Artist"),
-                "license": field("LicenseShortName") or "License not stated",
-                "license_url": field("LicenseUrl"),
-                "credit": field("Credit")
+                "license": field("LicenseShortName"),
+                "license_url": field("LicenseUrl")
             })
 
-    return found
+    return results
 
 
 def download_image(
@@ -64,65 +77,75 @@ def download_image(
     output_dir="assets/images",
     cache_name=None
 ):
+
     from PIL import Image
 
     folder = Path(output_dir)
     folder.mkdir(parents=True, exist_ok=True)
 
-    safe = re.sub(
+    slug = re.sub(
         r"[^a-z0-9]+",
         "-",
         (cache_name or query).lower()
-    ).strip("-")[:72]
+    ).strip("-")[:70]
 
-    index_path = folder / "metadata.json"
+    if not slug:
+        slug = "image"
+
+    index_file = folder / "metadata.json"
 
     try:
-        index = (
-            json.loads(index_path.read_text(encoding="utf-8"))
-            if index_path.exists()
-            else {}
+        index = json.loads(
+            index_file.read_text(encoding="utf-8")
         )
     except (OSError, ValueError):
         index = {}
 
-    cached = index.get(safe)
+    if slug in index:
 
-    if cached and Path(cached.get("path", "")).is_file():
-        return cached
+        cached = Path(index[slug].get("path", ""))
 
-    for item in search_images(query):
+        if cached.is_file():
+            return index[slug]
+
+    for item in search_images(query, 10):
 
         suffix = Path(
             urllib.parse.urlparse(item["url"]).path
         ).suffix.lower()
 
-        if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        if suffix not in (".jpg", ".jpeg", ".png", ".webp"):
             suffix = ".jpg"
 
-        target = folder / f"{safe}{suffix}"
+        target = folder / (slug + suffix)
 
         try:
-            req = urllib.request.Request(
+
+            request = urllib.request.Request(
                 item["url"],
-                headers={"User-Agent": UA}
+                headers={"User-Agent": USER_AGENT}
             )
 
-            with urllib.request.urlopen(req, timeout=45) as response:
-                target.write_bytes(response.read())
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = response.read()
+
+            if len(payload) < 2048:
+                continue
+
+            target.write_bytes(payload)
 
             with Image.open(target) as image:
                 image.verify()
 
             record = {
                 **item,
-                "path": str(target),
-                "query": query
+                "query": query,
+                "path": str(target)
             }
 
-            index[safe] = record
+            index[slug] = record
 
-            index_path.write_text(
+            index_file.write_text(
                 json.dumps(index, ensure_ascii=False, indent=2),
                 encoding="utf-8"
             )
@@ -135,27 +158,27 @@ def download_image(
     return None
 
 
-def write_credits(records, path):
+def write_credits(records, output):
 
     lines = [
-        "# Visual asset credits",
+        "# Wikimedia Commons asset credits",
         "",
-        "Review each source page and license before publishing.",
+        "Check each source page and license before publication.",
         ""
     ]
 
-    for record in records:
+    for item in records:
 
         lines += [
-            f"## {record.get('title') or 'Untitled Commons asset'}",
-            f"- Creator: {record.get('artist') or 'Not stated'}",
-            f"- License: {record.get('license') or 'Not stated'}",
-            f"- License URL: {record.get('license_url') or 'Not supplied'}",
-            f"- Source: {record.get('source_url') or 'Not supplied'}",
+            f"## {item.get('title', 'Untitled')}",
+            f"- Creator: {item.get('artist') or 'Not stated'}",
+            f"- License: {item.get('license') or 'Not stated'}",
+            f"- License URL: {item.get('license_url') or 'Not supplied'}",
+            f"- Source: {item.get('source_url') or 'Not supplied'}",
             ""
         ]
 
-    Path(path).write_text(
+    Path(output).write_text(
         "\n".join(lines),
         encoding="utf-8"
     )
