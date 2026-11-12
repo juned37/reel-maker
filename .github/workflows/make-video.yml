@@ -42,6 +42,15 @@ on:
         default: ""
         type: string
 
+      visual_style:
+        description: "Editorial matches the parchment/line-art reference; photographic uses Wikimedia images"
+        required: false
+        default: "editorial"
+        type: choice
+        options:
+          - "editorial"
+          - "photographic"
+
 permissions:
   contents: read
 
@@ -94,6 +103,7 @@ jobs:
           MINUTES: ${{ inputs.minutes }}
           VOICE: ${{ inputs.voice }}
           WATERMARK: ${{ inputs.watermark }}
+          VISUAL_STYLE: ${{ inputs.visual_style }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
         run: |
@@ -142,12 +152,15 @@ jobs:
 
           echo "Using script: $SCRIPT_TO_RENDER"
 
-          python -m engine.prepare_assets "$SCRIPT_TO_RENDER"
+          if [[ "$VISUAL_STYLE" == "photographic" ]]; then
+            python -m engine.prepare_assets "$SCRIPT_TO_RENDER"
+          fi
 
           python reel.py render \
             "$SCRIPT_TO_RENDER" \
             out/documentary.mp4 \
-            --tts edge
+            --tts edge \
+            --style "$VISUAL_STYLE"
 
           cp "$SCRIPT_TO_RENDER" out/documentary-script.json
 
