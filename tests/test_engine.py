@@ -2,6 +2,7 @@
 
 import pytest
 from PIL import Image
+from art import make_background
 
 from engine.quality import validate_script, count_words
 from engine.transitions import (
@@ -146,3 +147,17 @@ def test_claims_to_verify_must_be_a_list():
 
     with pytest.raises(ValueError, match="claims_to_verify"):
         validate_script(data)
+
+
+def test_editorial_background_is_warm_parchment():
+    image = make_background()
+    r, g, b = image.getpixel((540, 500))
+    assert r > 220 and g > 210 and b > 190
+
+
+def test_world_before_islam_script_defaults_to_editorial():
+    import json
+    from pathlib import Path
+    data = json.loads(Path("scripts/world-before-islam.json").read_text(encoding="utf-8"))
+    assert data["visual_style"] == "editorial"
+    assert all(scene.get("onscreen_title") for scene in data["scenes"])
