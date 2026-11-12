@@ -4,7 +4,6 @@ import os
 import time
 import urllib.error
 import urllib.request
-
 from pathlib import Path
 
 from .quality import validate_script
@@ -47,7 +46,7 @@ HISTORICAL ACCURACY:
   religious tradition and disputed reports.
 - Use cautious language when evidence is uncertain.
 - Do not present later religious traditions as contemporary eyewitness
-  records unless that is supported by evidence.
+  records unless supported by evidence.
 - Do not portray pre-Islamic Arabia as a world without religion,
   culture, trade, poetry or political organisation.
 - Explain the diversity of religious communities and beliefs where relevant.
@@ -76,7 +75,7 @@ Prefer queries with:
 - Asset type, such as archaeological site, museum artefact,
   historical map, manuscript, inscription or architecture.
 
-Examples of useful query styles:
+Examples:
 - "Petra Jordan Nabataean rock cut architecture archaeological site"
 - "Hegra Mada'in Salih Nabataean tombs Saudi Arabia"
 - "ancient South Arabian Sabaean inscription stone"
@@ -125,7 +124,90 @@ OUTPUT:
 """
 
 
-def call_model(model, prompt, key):
+def extract_json(text):
+    """Extract a JSON object from a model response."""
+    text = (text or "").strip()
+
+    if text.startswith("```"):
+        lines = text.splitlines()
+
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+
+        text = "\n".join(lines).strip()
+
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("Model response does not contain a JSON object.")
+
+    return json.loads(text[start:end + 1])
+
+
+def read_http_error(exc):
+    try:
+        detail = exc.read().decode("utf-8", "replace")
+    except Exception:
+        detail = str(exc)
+
+    return detail[:1000]
+
+
+def call_groq(model, prompt, key):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    body = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You write historically responsible documentaries. "
+                    "Follow the user's instructions and return valid JSON only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.45,
+        "max_tokens": 6000,
+        "response_format": {"type": "json_object"},
+    }
+
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(request, timeout=180) as response:
+        result = json.load(response)
+
+    choices = result.get("choices", [])
+
+    if not choices:
+        raise RuntimeError("Groq returned no choices.")
+
+    message = choices[0].get("message", {})
+    content = message.get("content")
+
+    if not content:
+        raise RuntimeError("Groq returned empty content.")
+
+    return content.strip()
+
+
+def call_gemini(model, prompt, key):
     url = (
         "https://generativelanguage.googleapis.com/"
         f"v1beta/models/{model}:generateContent"
@@ -141,8 +223,9 @@ def call_model(model, prompt, key):
         ],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.45
-        }
+            "temperature": 0.45,
+            "maxOutputTokens": 6000,
+        },
     }
 
     request = urllib.request.Request(
@@ -150,9 +233,9 @@ def call_model(model, prompt, key):
         data=json.dumps(body).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "x-goog-api-key": key
+            "x-goog-api-key": key,
         },
-        method="POST"
+        method="POST",
     )
 
     with urllib.request.urlopen(request, timeout=180) as response:
@@ -161,29 +244,115 @@ def call_model(model, prompt, key):
     candidates = result.get("candidates", [])
 
     if not candidates:
-        raise RuntimeError(f"{model} returned no candidates.")
+        raise RuntimeError("Gemini returned no candidates.")
 
-    parts = candidates[0].get(
-        "content", {}
-    ).get("parts", [])
+    candidate = candidates[0]
 
-    text = "".join(
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        raise RuntimeError("Gemini response was cut off by the output token limit.")
+
+    parts = candidate.get("content", {}).get("parts", [])
+
+    content = "".join(
         part.get("text", "")
         for part in parts
     ).strip()
 
-    if text.startswith("```"):
-        text = (
-            text.removeprefix("```json")
-            .removeprefix("```")
-            .removesuffix("```")
-            .strip()
-        )
+    if not content:
+        raise RuntimeError("Gemini returned empty content.")
 
-    if not text:
-        raise RuntimeError(f"{model} returned empty text.")
+    return content
 
-    return text
+
+def provider_configuration():
+    """Return configured providers in fallback order."""
+    providers = []
+
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+
+    if groq_key:
+        providers.append({
+            "name": "Groq",
+            "model": (
+                os.getenv("GROQ_MODEL", "").strip()
+                or "openai/gpt-oss-120b"
+            ),
+            "key": groq_key,
+            "call": call_groq,
+        })
+
+    if gemini_key:
+        providers.append({
+            "name": "Gemini",
+            "model": (
+                os.getenv("GEMINI_MODEL", "").strip()
+                or "gemini-2.5-flash"
+            ),
+            "key": gemini_key,
+            "call": call_gemini,
+        })
+
+    return providers
+
+
+def generate_with_provider(provider, prompt, minutes):
+    """Try a provider twice, then let the next provider take over."""
+    errors = []
+
+    for attempt in range(2):
+        try:
+            response_text = provider["call"](
+                provider["model"],
+                prompt,
+                provider["key"],
+            )
+
+            candidate = extract_json(response_text)
+
+            validate_script(
+                candidate,
+                target_minutes=minutes,
+            )
+
+            return candidate
+
+        except urllib.error.HTTPError as exc:
+            detail = read_http_error(exc)
+            message = (
+                f"{provider['name']} ({provider['model']}): "
+                f"HTTP {exc.code}: {detail}"
+            )
+            errors.append(message)
+
+            # Retry only temporary server/rate-limit errors.
+            if exc.code not in (408, 429, 500, 502, 503, 504):
+                break
+
+            if attempt == 0:
+                retry_after = exc.headers.get("Retry-After", "5")
+
+                try:
+                    delay = min(max(float(retry_after), 1), 30)
+                except (TypeError, ValueError):
+                    delay = 5
+
+                time.sleep(delay)
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ValueError,
+            RuntimeError,
+        ) as exc:
+            errors.append(
+                f"{provider['name']} ({provider['model']}): {exc}"
+            )
+
+            if attempt == 0:
+                time.sleep(3)
+
+    raise RuntimeError("\n".join(errors))
 
 
 def generate_documentary(topic, output, minutes=3):
@@ -194,10 +363,13 @@ def generate_documentary(topic, output, minutes=3):
             "Documentary duration must be between 2 and 5 minutes."
         )
 
-    key = os.getenv("GEMINI_API_KEY")
+    providers = provider_configuration()
 
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY secret is missing.")
+    if not providers:
+        raise RuntimeError(
+            "No AI provider API key found. Add GROQ_API_KEY "
+            "or GEMINI_API_KEY to GitHub Actions secrets."
+        )
 
     target_words = round(minutes * 135)
     minimum_words = round(target_words * 0.80)
@@ -208,108 +380,71 @@ def generate_documentary(topic, output, minutes=3):
         minutes=minutes,
         words=target_words,
         minimum_words=minimum_words,
-        maximum_words=maximum_words
+        maximum_words=maximum_words,
     )
-
-    models = [
-        os.getenv("GEMINI_MODEL"),
-        "gemini-3.5-flash-lite",
-        "gemini-3.8-flash"
-    ]
 
     errors = []
     data = None
 
-    for model in dict.fromkeys(
-        item for item in models if item
-    ):
-        for attempt in range(2):
-            try:
-                response_text = call_model(
-                    model,
-                    prompt,
-                    key
-                )
+    for provider in providers:
+        try:
+            data = generate_with_provider(
+                provider,
+                prompt,
+                minutes,
+            )
 
-                candidate = json.loads(response_text)
-
-                validate_script(
-                    candidate,
-                    target_minutes=minutes
-                )
-
-                data = candidate
-                print(f"Documentary generated using {model}.")
-                break
-
-            except urllib.error.HTTPError as exc:
-                detail = exc.read().decode(
-                    "utf-8",
-                    "replace"
-                )[:500]
-
-                errors.append(
-                    f"{model}: HTTP {exc.code}: {detail}"
-                )
-
-                if exc.code == 404:
-                    break
-
-                if attempt == 0:
-                    time.sleep(4)
-
-            except (
-                urllib.error.URLError,
-                TimeoutError,
-                ValueError,
-                RuntimeError
-            ) as exc:
-                errors.append(f"{model}: {exc}")
-
-                if attempt == 0:
-                    time.sleep(3)
-
-        if data is not None:
+            print(
+                f"Documentary generated using "
+                f"{provider['name']} ({provider['model']})."
+            )
             break
+
+        except RuntimeError as exc:
+            errors.append(str(exc))
+            print(
+                f"{provider['name']} failed. "
+                "Trying the next configured provider."
+            )
 
     if data is None:
         raise RuntimeError(
-            "Gemini generation failed for all configured models:\n"
+            "All configured AI providers failed:\n"
             + "\n".join(errors)
         )
 
     data.setdefault(
         "voice",
-        os.getenv("VOICE", "en-US-GuyNeural")
+        os.getenv("VOICE", "en-US-GuyNeural"),
     )
 
     data.setdefault("rate", "-3%")
 
     data.setdefault(
         "watermark",
-        os.getenv("WATERMARK", "")
+        os.getenv("WATERMARK", ""),
     )
 
     data.setdefault("claims_to_verify", [])
 
     validate_script(
         data,
-        target_minutes=minutes
+        target_minutes=minutes,
     )
 
     path = Path(output)
     path.parent.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
     path.write_text(
         json.dumps(
             data,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         ),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     print(
