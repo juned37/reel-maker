@@ -240,14 +240,19 @@ def make_element(spec):
     return img, pos
 
 # ---------------------------------------------------------------- background / title
-def make_base(script):
+def make_background():
+    """Warm parchment background shared by title and illustrated scene cards."""
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     t = yy / H
     top, bot = np.array([246, 237, 224], np.float32), np.array([222, 198, 172], np.float32)
     arr = top[None, None, :] * (1 - t[..., None]) + bot[None, None, :] * t[..., None]
     glow = np.exp(-(((xx - W / 2) / 520) ** 2 + ((yy - 120) / 520) ** 2))[..., None] * 18
     vig = (((xx - W / 2) / (W * 0.9)) ** 2 + ((yy - H / 2) / (H * 0.75)) ** 2)[..., None] * 22
-    img = Image.fromarray(np.clip(arr + glow - vig, 0, 255).astype(np.uint8), "RGB")
+    return Image.fromarray(np.clip(arr + glow - vig, 0, 255).astype(np.uint8), "RGB")
+
+
+def make_base(script):
+    img = make_background()
     d = ImageDraw.Draw(img)
     lines = script["title"][:2]; ys = [300, 395] if len(lines) == 2 else [330]
     for i, (ln, y) in enumerate(zip(lines, ys)):
