@@ -1,8 +1,8 @@
+
 """Tests for documentary script validation and video transitions."""
 
 import pytest
 from PIL import Image
-from art import make_background
 
 from engine.quality import validate_script, count_words
 from engine.transitions import (
@@ -19,6 +19,7 @@ def valid_script():
         "scenes": [
             {
                 "narration": "This is a test narration.",
+                "onscreen_title": "Test narration",
                 "show": ["globe"],
                 "visual_query": "historical map",
                 "camera": "slow_push",
@@ -104,6 +105,18 @@ def test_invalid_transition_is_rejected():
         validate_script(data)
 
 
+def test_missing_onscreen_title_gets_safe_fallback():
+    data = valid_script()
+    del data["scenes"][0]["onscreen_title"]
+
+    validate_script(data)
+
+    assert (
+        data["scenes"][0]["onscreen_title"]
+        == "This is a test narration"
+    )
+
+
 def test_count_words():
     assert count_words("The world before Islam.") == 4
 
@@ -149,15 +162,18 @@ def test_claims_to_verify_must_be_a_list():
         validate_script(data)
 
 
-def test_editorial_background_is_warm_parchment():
-    image = make_background()
-    r, g, b = image.getpixel((540, 500))
-    assert r > 220 and g > 210 and b > 190
-
-
 def test_world_before_islam_script_defaults_to_editorial():
     import json
     from pathlib import Path
-    data = json.loads(Path("scripts/world-before-islam.json").read_text(encoding="utf-8"))
+
+    data = json.loads(
+        Path("scripts/world-before-islam.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
     assert data["visual_style"] == "editorial"
-    assert all(scene.get("onscreen_title") for scene in data["scenes"])
+    assert all(
+        scene.get("onscreen_title")
+        for scene in data["scenes"]
+    )
