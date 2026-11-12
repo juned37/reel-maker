@@ -2,7 +2,6 @@
 
 from PIL import Image
 
-
 SUPPORTED_TRANSITIONS = {"crossfade", "cut"}
 
 
