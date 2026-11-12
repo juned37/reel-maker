@@ -1,11 +1,10 @@
-
-name: Make documentary video
+name: Make vertical documentary video
 
 on:
   workflow_dispatch:
     inputs:
       topic:
-        description: "New documentary topic; leave blank to use selected JSON"
+        description: "New documentary topic; leave blank to use the selected JSON"
         required: false
         type: string
 
@@ -16,7 +15,7 @@ on:
         type: string
 
       minutes:
-        description: "Target duration for Gemini generation"
+        description: "Target duration for generated narration"
         required: false
         default: "3"
         type: choice
@@ -59,37 +58,36 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
 
-      - name: Install system and Python dependencies
+      - name: Install system dependencies
         run: |
           set -euo pipefail
-
           sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            espeak-ng \
-            fonts-dejavu-core
+          sudo apt-get install -y ffmpeg espeak-ng fonts-dejavu-core
 
+      - name: Install Python dependencies
+        run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      - name: Check required tools
+      - name: Verify tools
         run: |
           set -euo pipefail
-
           python --version
           ffmpeg -version
           ffprobe -version
           espeak-ng --version
 
       - name: Run tests
-        run: |
-          python -m pytest -q
         env:
           PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m pytest -q
 
-      - name: Generate or select documentary script
+      - name: Generate or select documentary
         env:
           TOPIC: ${{ inputs.topic }}
           SCRIPT_IN: ${{ inputs.script }}
@@ -100,13 +98,11 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
         run: |
           set -euo pipefail
-
           mkdir -p out
 
           if [[ -n "${TOPIC// /}" ]]; then
-
             if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-              echo "GEMINI_API_KEY is required when generating a new topic."
+              echo "GEMINI_API_KEY is required to generate a new topic."
               exit 1
             fi
 
@@ -128,7 +124,6 @@ jobs:
               os.getenv("VOICE")
               or data.get("voice", "en-US-GuyNeural")
           )
-
           data["watermark"] = os.getenv("WATERMARK", "")
 
           with open(path, "w", encoding="utf-8") as file:
@@ -136,19 +131,16 @@ jobs:
           PY
 
             SCRIPT_TO_RENDER="out/documentary.json"
-
           else
-
             SCRIPT_TO_RENDER="${SCRIPT_IN:-scripts/world-before-islam.json}"
 
             if [[ ! -f "$SCRIPT_TO_RENDER" ]]; then
-              echo "Script file not found: $SCRIPT_TO_RENDER"
+              echo "Script not found: $SCRIPT_TO_RENDER"
               exit 1
             fi
-
           fi
 
-          echo "Selected script: $SCRIPT_TO_RENDER"
+          echo "Using script: $SCRIPT_TO_RENDER"
 
           python -m engine.prepare_assets "$SCRIPT_TO_RENDER"
 
@@ -160,37 +152,92 @@ jobs:
           cp "$SCRIPT_TO_RENDER" out/documentary-script.json
 
           CREDITS="$(dirname "$SCRIPT_TO_RENDER")/asset-credits.md"
-
-          if [[ -f "$CREDITS" ]]; then
-            if [[ "$CREDITS" != "out/asset-credits.md" ]]; then
-              cp "$CREDITS" out/asset-credits.md
-            fi
+          if [[ -f "$CREDITS" && "$CREDITS" != "out/asset-credits.md" ]]; then
+            cp "$CREDITS" out/asset-credits.md
           fi
 
           NOTES="$(dirname "$SCRIPT_TO_RENDER")/render-notes.md"
-
           if [[ -f "$NOTES" && "$NOTES" != "out/render-notes.md" ]]; then
             cp "$NOTES" out/render-notes.md
           fi
 
-      - name: Verify generated video
+      - name: Verify video format and streams
         run: |
           set -euo pipefail
 
-          test -s out/documentary.mp4
-          test -s out/documentary-script.json
+          VIDEO="out/documentary.mp4"
+          test -s "$VIDEO"
+          test -s "out/documentary-script.json"
 
-          ffprobe \
-            -v error \
-            -show_entries format=duration \
-            -of default=noprint_wrappers=1:nokey=1 \
-            out/documentary.mp4
+          python - <<'PY'
+          import json
+          import subprocess
+          import sys
 
-          ffprobe \
-            -v error \
-            -show_entries stream=codec_type,codec_name \
-            -of default=noprint_wrappers=1 \
-            out/documentary.mp4
+          video = "out/documentary.mp4"
+
+          result = subprocess.run(
+              [
+                  "ffprobe",
+                  "-v", "error",
+                  "-show_entries",
+                  "stream=codec_type,codec_name,width,height,r_frame_rate",
+                  "-show_entries",
+                  "format=duration",
+                  "-of", "json",
+                  video,
+              ],
+              capture_output=True,
+              text=True,
+              check=True,
+          )
+
+          data = json.loads(result.stdout)
+          streams = data.get("streams", [])
+          video_streams = [
+              item for item in streams
+              if item.get("codec_type") == "video"
+          ]
+          audio_streams = [
+              item for item in streams
+              if item.get("codec_type") == "audio"
+          ]
+
+          if len(video_streams) != 1:
+              sys.exit("Expected exactly one video stream.")
+
+          if not audio_streams:
+              sys.exit("No audio stream found.")
+
+          video_stream = video_streams[0]
+
+          if video_stream.get("codec_name") != "h264":
+              sys.exit("Video codec must be H.264.")
+
+          if video_stream.get("width") != 1080:
+              sys.exit("Video width must be 1080.")
+
+          if video_stream.get("height") != 1920:
+              sys.exit("Video height must be 1920.")
+
+          if video_stream.get("r_frame_rate") != "30/1":
+              sys.exit("Video frame rate must be 30 FPS.")
+
+          if audio_streams[0].get("codec_name") != "aac":
+              sys.exit("Audio codec must be AAC.")
+
+          duration = float(data["format"]["duration"])
+
+          if duration < 60:
+              sys.exit(f"Video is unexpectedly short: {duration:.1f}s")
+
+          print("Video verification passed.")
+          print(f"Resolution: 1080x1920")
+          print(f"Frame rate: 30 FPS")
+          print(f"Duration: {duration:.2f} seconds")
+          print("Video codec: H.264")
+          print("Audio codec: AAC")
+          PY
 
           echo "Generated files:"
           ls -lh out/
@@ -198,7 +245,7 @@ jobs:
       - name: Upload video and supporting files
         uses: actions/upload-artifact@v4
         with:
-          name: reel-maker-documentary
+          name: vertical-documentary-video
           path: out/
           if-no-files-found: error
           retention-days: 14
