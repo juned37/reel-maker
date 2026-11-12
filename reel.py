@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Reel Maker: cinematic documentary renderer.
-
-Commands:
-  python reel.py generate "topic" scripts/generated.json --minutes 3
-  python -m engine.prepare_assets scripts/generated.json
-  python reel.py render scripts/generated.json out/video.mp4 --tts edge
-"""
+"""Vertical documentary video generator for Reels and YouTube Shorts."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -22,142 +17,155 @@ from art import (
     W, H, INK, GOLD, make_base, make_element,
     parse_spec, FIXED, font
 )
-
 from engine.audio import synthesize
 from engine.motion import render_motion
+from engine.transitions import transition_name, crossfade
 from engine.quality import validate_script
 from engine.story import generate_documentary
 
 
+WIDTH = 1080
+HEIGHT = 1920
 FPS = 30
-LEAD = 0.5
-SCENE_GAP = 0.25
-END_GAP = 0.8
+
+LEAD_SECONDS = 1.2
+SCENE_GAP_SECONDS = 0.18
+END_SECONDS = 1.0
+
+CAPTION_Y = 1450
+CAPTION_WIDTH = 940
+CAPTION_MAX_WORDS = 8
 
 
-def probe(path):
+def run_checked(command: list[str], **kwargs):
+    """Run a command and raise a useful error if it fails."""
     result = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(path)
-        ],
+        command,
         capture_output=True,
         text=True,
-        check=True
+        **kwargs
     )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Command failed:\n"
+            + " ".join(map(str, command))
+            + "\n\n"
+            + (result.stderr or result.stdout or "No error output")
+        )
+
+    return result
+
+
+def probe_duration(path: Path) -> float:
+    result = run_checked([
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path)
+    ])
 
     return float(result.stdout.strip())
 
 
 def word_bounds(words, bounds, duration):
-
+    """Use speech timing when available; otherwise estimate by word length."""
     if bounds and len(bounds) == len(words):
         return bounds
 
     weights = [max(1, len(word)) for word in words]
     total = sum(weights) or 1
-
     cursor = 0
-    result = []
+    output = []
 
-    usable = max(0.1, duration - 0.08)
+    usable = max(0.1, duration - 0.05)
 
     for weight in weights:
         start = usable * cursor / total
         cursor += weight
         end = usable * cursor / total
+        output.append((start, end))
 
-        result.append((start, end))
-
-    return result
+    return output
 
 
-def build_audio(scenes, voice, rate, provider, work):
-
+def build_audio(scenes, voice, rate, provider, work: Path):
+    """Create one narration track and a matching scene/word timeline."""
     tracks = []
     timeline = []
-    now = LEAD
+    current_time = LEAD_SECONDS
 
     lead = work / "lead.wav"
 
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "lavfi",
-            "-i", "anullsrc=r=44100:cl=mono",
-            "-t", str(LEAD),
-            "-ar", "44100",
-            "-ac", "1",
-            str(lead)
-        ],
-        check=True
-    )
+    run_checked([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "lavfi",
+        "-i", "anullsrc=r=44100:cl=mono",
+        "-t", str(LEAD_SECONDS),
+        "-ar", "44100",
+        "-ac", "1",
+        str(lead)
+    ])
 
     tracks.append(lead)
 
     for index, scene in enumerate(scenes):
+        narration = scene["narration"].strip()
+        words = narration.split()
 
-        text = scene["narration"]
-        words = text.split()
-
-        audio_path, bounds = synthesize(
-            text,
+        audio_path, speech_bounds = synthesize(
+            narration,
             voice,
             rate,
             work / f"voice-{index:03d}",
             provider
         )
 
-        duration = probe(audio_path)
+        speech_duration = probe_duration(Path(audio_path))
 
         gap = (
-            END_GAP
+            END_SECONDS
             if index == len(scenes) - 1
-            else SCENE_GAP
+            else SCENE_GAP_SECONDS
         )
 
-        segment_duration = duration + gap
-
+        segment_duration = speech_duration + gap
         normalized = work / f"segment-{index:03d}.wav"
 
-        subprocess.run(
-            [
-                "ffmpeg", "-y", "-loglevel", "error",
-                "-i", str(audio_path),
-                "-af", "apad",
-                "-t", f"{segment_duration:.3f}",
-                "-ar", "44100",
-                "-ac", "1",
-                str(normalized)
-            ],
-            check=True
-        )
+        run_checked([
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", str(audio_path),
+            "-af", "apad",
+            "-t", f"{segment_duration:.3f}",
+            "-ar", "44100",
+            "-ac", "1",
+            str(normalized)
+        ])
 
         tracks.append(normalized)
 
-        timed = [
-            (word, now + start, now + end)
+        timed_words = [
+            (word, current_time + start, current_time + end)
             for word, (start, end) in zip(
                 words,
-                word_bounds(words, bounds, duration)
+                word_bounds(words, speech_bounds, speech_duration)
             )
         ]
 
         timeline.append({
-            "start": now,
-            "end": now + segment_duration,
-            "words": timed
+            "start": current_time,
+            "speech_end": current_time + speech_duration,
+            "end": current_time + segment_duration,
+            "words": timed_words
         })
 
-        now += segment_duration
+        current_time += segment_duration
 
-    concat = work / "audio-list.txt"
-
-    concat.write_text(
+    concat_file = work / "audio-list.txt"
+    concat_file.write_text(
         "".join(
-            f"file '{track.resolve()}'\n"
+            f"file '{track.resolve().as_posix()}'\n"
             for track in tracks
         ),
         encoding="utf-8"
@@ -165,336 +173,442 @@ def build_audio(scenes, voice, rate, provider, work):
 
     combined = work / "combined.wav"
 
-    subprocess.run(
-        [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(concat),
-            "-c", "copy",
-            str(combined)
-        ],
-        check=True
-    )
+    run_checked([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(concat_file),
+        "-c:a", "pcm_s16le",
+        str(combined)
+    ])
 
-    return combined, timeline, now
+    return combined, timeline, current_time
+
+
+def load_scene_images(scenes):
+    images = []
+
+    for scene in scenes:
+        image_path = scene.get("image")
+
+        if not image_path:
+            images.append(None)
+            continue
+
+        try:
+            with Image.open(image_path) as source:
+                images.append(source.convert("RGB").copy())
+        except (OSError, TypeError, ValueError):
+            print(f"WARNING: Could not open scene image: {image_path}")
+            images.append(None)
+
+    return images
 
 
 def build_art_elements(scenes, timeline):
-
+    """Prepare optional illustrations for scenes without photographs."""
     elements = []
-    active = []
 
     for scene, timing in zip(scenes, timeline):
-
-        if scene.get("clear"):
-
-            for item in active:
-                item["hide"] = timing["start"]
-
-            active = []
-
         if scene.get("image"):
             continue
 
         for spec in scene.get("show", []):
-
-            image, (x, y) = make_element(spec)
-
-            item = {
-                "image": image.convert("RGB"),
-                "mask": image.getchannel("A"),
-                "x": x,
-                "y": y,
-                "floating": parse_spec(spec)[0] not in FIXED,
-                "show": timing["start"] + 0.1,
-                "hide": None
-            }
-
-            elements.append(item)
-            active.append(item)
+            try:
+                image, (x, y) = make_element(spec)
+                elements.append({
+                    "image": image.convert("RGBA"),
+                    "x": int(x),
+                    "y": int(y),
+                    "show": timing["start"] + 0.15,
+                    "hide": timing["end"],
+                    "floating": parse_spec(spec)[0] not in FIXED
+                })
+            except Exception as exc:
+                print(f"WARNING: Could not create illustration {spec!r}: {exc}")
 
     return elements
 
 
-def draw_caption(frame, word_entries, current_time):
+def make_fallback_background():
+    """Neutral dark background for scenes without a usable image."""
+    return Image.new("RGB", (WIDTH, HEIGHT), (24, 29, 34))
 
-    visible = [
-        word for word in word_entries
-        if word[1] <= current_time < word[2]
-    ]
 
-    if not visible:
+def draw_scene_heading(frame, scene, scene_number):
+    """Draw a small editorial scene label, not a fabricated historical claim."""
+    label = scene.get("onscreen_title") or scene.get("label")
+
+    if not label:
         return
 
-    active = visible[-1]
-
-    candidates = [
-        word for word in word_entries
-        if active[1] - 2.4 <= word[1] <= active[1]
-    ][-7:]
-
-    phrase = " ".join(item[0] for item in candidates)
-
     draw = ImageDraw.Draw(frame)
+    heading_font = font(42, True)
 
-    caption_font = font(54, True)
-
-    while (
-        draw.textlength(phrase, font=caption_font) > 900
-        and caption_font.size > 34
-    ):
-        caption_font = font(caption_font.size - 2, True)
+    max_width = 900
+    while draw.textlength(str(label), font=heading_font) > max_width:
+        if heading_font.size <= 26:
+            break
+        heading_font = font(heading_font.size - 2, True)
 
     draw.rounded_rectangle(
-        (55, 1250, 1025, 1450),
-        radius=22,
-        fill=(250, 245, 235)
+        (60, 105, 1020, 205),
+        radius=24,
+        fill=(12, 16, 20, 190)
     )
 
     draw.text(
-        (W // 2, 1350),
+        (WIDTH // 2, 155),
+        str(label),
+        font=heading_font,
+        fill=(255, 248, 230),
+        anchor="mm"
+    )
+
+
+def draw_caption(frame, word_entries, current_time):
+    """Render a compact, timed caption within the central safe area."""
+    active_index = None
+
+    for index, item in enumerate(word_entries):
+        if item[1] <= current_time < item[2]:
+            active_index = index
+            break
+
+    if active_index is None:
+        return
+
+    start = max(0, active_index - CAPTION_MAX_WORDS + 1)
+    selected = word_entries[start:active_index + 1]
+    phrase = " ".join(item[0] for item in selected)
+
+    draw = ImageDraw.Draw(frame)
+    caption_font = font(48, True)
+
+    while (
+        draw.textlength(phrase, font=caption_font) > CAPTION_WIDTH
+        and caption_font.size > 32
+    ):
+        caption_font = font(caption_font.size - 2, True)
+
+    box_height = 120
+    box_top = CAPTION_Y
+
+    draw.rounded_rectangle(
+        (
+            55,
+            box_top,
+            WIDTH - 55,
+            box_top + box_height
+        ),
+        radius=24,
+        fill=(8, 12, 16, 220)
+    )
+
+    draw.text(
+        (WIDTH // 2, box_top + box_height // 2),
         phrase,
         font=caption_font,
-        fill=GOLD,
+        fill=(255, 255, 255),
         anchor="mm",
         align="center"
     )
 
 
+def apply_art_elements(frame, elements, current_time):
+    for item in elements:
+        if current_time < item["show"] or current_time >= item["hide"]:
+            continue
+
+        image = item["image"]
+        alpha = min(1.0, (current_time - item["show"]) / 0.5)
+
+        if alpha <= 0:
+            continue
+
+        if alpha < 0.999:
+            image = image.copy()
+            channel = image.getchannel("A")
+            channel = channel.point(
+                lambda value, factor=alpha: int(value * factor)
+            )
+            image.putalpha(channel)
+
+        dy = 0
+        if item["floating"]:
+            dy = int(math.sin(current_time * 1.4) * 4)
+
+        frame.paste(
+            image,
+            (item["x"], item["y"] + dy),
+            image
+        )
+
+
+def create_title_card(data):
+    """Use the repository's existing artwork as a separate opening card."""
+    card = make_base(data).convert("RGB")
+    return card.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+
+
+def render_frame(
+    scene_index,
+    now,
+    scenes,
+    images,
+    timeline,
+    art_elements,
+    previous_scene_frame,
+    title_card
+):
+    scene = scenes[scene_index]
+    timing = timeline[scene_index]
+
+    if now < LEAD_SECONDS:
+        frame = title_card.copy()
+        return frame
+
+    if images[scene_index] is not None:
+        span = max(0.1, timing["speech_end"] - timing["start"])
+        progress = min(
+            1.0,
+            max(0.0, (now - timing["start"]) / span)
+        )
+
+        frame = make_fallback_background()
+        render_motion(
+            frame,
+            images[scene_index],
+            progress,
+            scene
+        )
+    else:
+        frame = make_fallback_background()
+        apply_art_elements(frame, art_elements, now)
+
+    draw_scene_heading(frame, scene, scene_index + 1)
+
+    all_words = [
+        word
+        for item in timeline
+        for word in item["words"]
+    ]
+    draw_caption(frame, all_words, now)
+
+    return frame
+
+
 def render(script_path, output_path, provider="edge"):
-
     script_path = Path(script_path)
+    output_path = Path(output_path)
 
-    data = json.loads(
-        script_path.read_text(encoding="utf-8")
-    )
+    if not script_path.is_file():
+        raise FileNotFoundError(f"Script not found: {script_path}")
 
+    data = json.loads(script_path.read_text(encoding="utf-8"))
     validate_script(data)
 
     scenes = data["scenes"]
-
-    work = Path(
-        tempfile.mkdtemp(prefix="reel-maker-")
-    )
-
-    audio, timeline, duration = build_audio(
-        scenes,
-        data.get("voice", "en-US-GuyNeural"),
-        data.get("rate", "-3%"),
-        provider,
-        work
-    )
-
-    base = make_base(data)
-
-    art_elements = build_art_elements(
-        scenes,
-        timeline
-    )
-
-    images = []
-
-    for scene in scenes:
-
-        try:
-            with Image.open(scene["image"]) as source:
-                images.append(source.convert("RGB"))
-
-        except (KeyError, OSError, TypeError):
-            images.append(None)
-
-    words = [
-        word
-        for entry in timeline
-        for word in entry["words"]
-    ]
-
-    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    command = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "rawvideo",
-        "-pix_fmt", "rgb24",
-        "-s", f"{W}x{H}",
-        "-r", str(FPS),
-        "-i", "-",
-        "-i", str(audio),
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "20",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "160k",
-        "-shortest",
-        "-movflags", "+faststart",
-        str(output_path)
-    ]
-
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE
-    )
-
-    total_frames = math.ceil(duration * FPS)
-    scene_index = 0
+    work = Path(tempfile.mkdtemp(prefix="reel-maker-"))
 
     try:
+        audio, timeline, total_duration = build_audio(
+            scenes,
+            data.get("voice", "en-US-GuyNeural"),
+            data.get("rate", "-3%"),
+            provider,
+            work
+        )
 
-        for frame_no in range(total_frames):
+        images = load_scene_images(scenes)
+        art_elements = build_art_elements(scenes, timeline)
+        title_card = create_title_card(data)
 
-            now = frame_no / FPS
-            frame = base.copy()
+        words_by_scene = [item["words"] for item in timeline]
 
-            while (
-                scene_index < len(timeline) - 1
-                and now >= timeline[scene_index]["end"]
-            ):
-                scene_index += 1
+        command = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-s:v", f"{WIDTH}x{HEIGHT}",
+            "-r", str(FPS),
+            "-i", "-",
+            "-i", str(audio),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "19",
+            "-pix_fmt", "yuv420p",
+            "-r", str(FPS),
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "44100",
+            "-shortest",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
 
-            timing = timeline[scene_index]
-            scene = scenes[scene_index]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
 
-            span = max(
-                0.1,
-                timing["end"] - timing["start"]
-            )
+        total_frames = math.ceil(total_duration * FPS)
+        previous_frame = None
+        scene_index = 0
 
-            progress = min(
-                1.0,
-                max(
-                    0.0,
-                    (now - timing["start"]) / span
-                )
-            )
+        try:
+            for frame_number in range(total_frames):
+                now = frame_number / FPS
 
-            if images[scene_index] is not None:
+                while (
+                    scene_index < len(timeline) - 1
+                    and now >= timeline[scene_index]["end"]
+                ):
+                    scene_index += 1
 
-                render_motion(
-                    frame,
-                    images[scene_index],
-                    progress,
-                    scene
-                )
-
-            for item in art_elements:
-
-                if now < item["show"]:
-                    continue
-
-                alpha = min(
-                    1.0,
-                    (now - item["show"]) / 0.8
-                )
-
-                if item["hide"] is not None:
-
-                    alpha *= max(
-                        0.0,
-                        1.0 - (now - item["hide"]) / 0.5
+                if now < LEAD_SECONDS:
+                    frame = title_card.copy()
+                else:
+                    timing = timeline[scene_index]
+                    scene = scenes[scene_index]
+                    span = max(
+                        0.1,
+                        timing["speech_end"] - timing["start"]
+                    )
+                    progress = min(
+                        1.0,
+                        max(0.0, (now - timing["start"]) / span)
                     )
 
-                if alpha <= 0:
-                    continue
-
-                dy = (
-                    int(
-                        5 * math.sin(
-                            (now - item["show"]) * 1.5
+                    if images[scene_index] is not None:
+                        frame = make_fallback_background()
+                        render_motion(
+                            frame,
+                            images[scene_index],
+                            progress,
+                            scene
                         )
+                    else:
+                        frame = make_fallback_background()
+                        apply_art_elements(frame, art_elements, now)
+
+                    draw_scene_heading(frame, scene, scene_index + 1)
+                    draw_caption(frame, words_by_scene[scene_index], now)
+
+                    transition = transition_name(scene)
+                    transition_frames = int(0.35 * FPS)
+
+                    if (
+                        previous_frame is not None
+                        and frame_number < LEAD_SECONDS * FPS + transition_frames
+                        and transition == "crossfade"
+                    ):
+                        blend_progress = min(
+                            1.0,
+                            (now - LEAD_SECONDS) / 0.35
+                        )
+                        frame = crossfade(
+                            title_card,
+                            frame,
+                            blend_progress
+                        )
+
+                if frame.size != (WIDTH, HEIGHT):
+                    frame = frame.resize(
+                        (WIDTH, HEIGHT),
+                        Image.Resampling.LANCZOS
                     )
-                    if item["floating"]
-                    else 0
+
+                process.stdin.write(frame.convert("RGB").tobytes())
+                previous_frame = frame
+
+                if frame_number and frame_number % (FPS * 15) == 0:
+                    print(f"Rendered {frame_number}/{total_frames} frames")
+
+        except (BrokenPipeError, OSError) as exc:
+            raise RuntimeError(
+                "FFmpeg stopped while receiving video frames."
+            ) from exc
+        finally:
+            if process.stdin and not process.stdin.closed:
+                process.stdin.close()
+
+        stderr = process.stderr.read().decode(
+            "utf-8",
+            errors="replace"
+        ) if process.stderr else ""
+
+        return_code = process.wait()
+
+        if return_code != 0:
+            raise RuntimeError(f"FFmpeg rendering failed:\n{stderr}")
+
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            raise RuntimeError("FFmpeg did not create a valid output file.")
+
+        actual_duration = probe_duration(output_path)
+
+        notes = [
+            f"# {' '.join(data.get('title', []))}",
+            "",
+            "## Production details",
+            f"- Format: vertical 9:16 ({WIDTH}x{HEIGHT})",
+            f"- Frame rate: {FPS} FPS",
+            "- Video: H.264",
+            "- Audio: AAC narration",
+            f"- Duration: {actual_duration:.2f} seconds",
+            "",
+            "## Claims to verify before publication",
+            ""
+        ]
+
+        notes.extend(
+            f"- {claim}"
+            for claim in data.get("claims_to_verify", [])
+        )
+
+        notes.extend([
+            "",
+            "## Historical and visual notes",
+            ""
+        ])
+
+        for index, scene in enumerate(scenes, 1):
+            if scene.get("source_notes"):
+                notes.append(
+                    f"- Scene {index}: {scene['source_notes']}"
                 )
 
-                mask = item["mask"]
+        (output_path.parent / "render-notes.md").write_text(
+            "\n".join(notes) + "\n",
+            encoding="utf-8"
+        )
 
-                if alpha < 0.999:
-
-                    mask = mask.point(
-                        lambda value, a=alpha:
-                        int(value * a)
-                    )
-
-                frame.paste(
-                    item["image"],
-                    (
-                        int(item["x"]),
-                        int(item["y"]) + dy
-                    ),
-                    mask
-                )
-
-            draw_caption(frame, words, now)
-
-            process.stdin.write(frame.tobytes())
-
-            if frame_no and frame_no % (FPS * 15) == 0:
-                print(
-                    f"Rendered {frame_no}/{total_frames} frames"
-                )
-
-    except BrokenPipeError as exc:
-
-        raise RuntimeError(
-            "FFmpeg stopped while receiving video frames."
-        ) from exc
+        print(f"Video created: {output_path}")
+        print(f"Duration: {actual_duration:.2f} seconds")
 
     finally:
-
-        if process.stdin and not process.stdin.closed:
-            process.stdin.close()
-
-    if process.wait() != 0:
-        raise RuntimeError("FFmpeg rendering failed.")
-
-    notes = [
-        f"# {' '.join(data.get('title', []))}",
-        "",
-        "## Claims to verify before publishing",
-        ""
-    ]
-
-    notes.extend(
-        f"- {claim}"
-        for claim in data.get("claims_to_verify", [])
-    )
-
-    notes.extend([
-        "",
-        f"Rendered duration: {duration / 60:.2f} minutes",
-        f"Spoken words: {sum(len(s['narration'].split()) for s in scenes)}"
-    ])
-
-    (output_path.parent / "render-notes.md").write_text(
-        "\n".join(notes) + "\n",
-        encoding="utf-8"
-    )
-
-    print(f"Video created: {output_path}")
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
 
-    parser = argparse.ArgumentParser(
-        description=__doc__
-    )
+    generate_parser = commands.add_parser("generate")
+    generate_parser.add_argument("topic")
+    generate_parser.add_argument("output")
+    generate_parser.add_argument("--minutes", type=float, default=3.0)
 
-    commands = parser.add_subparsers(
-        dest="command",
-        required=True
-    )
-
-    gen = commands.add_parser("generate")
-    gen.add_argument("topic")
-    gen.add_argument("output")
-    gen.add_argument("--minutes", type=float, default=3.0)
-
-    ren = commands.add_parser("render")
-    ren.add_argument("script")
-    ren.add_argument("output")
-    ren.add_argument(
+    render_parser = commands.add_parser("render")
+    render_parser.add_argument("script")
+    render_parser.add_argument("output")
+    render_parser.add_argument(
         "--tts",
         choices=("edge", "espeak"),
         default="edge"
@@ -503,15 +617,12 @@ def main():
     args = parser.parse_args()
 
     if args.command == "generate":
-
         generate_documentary(
             args.topic,
             args.output,
             args.minutes
         )
-
     else:
-
         render(
             args.script,
             args.output,
