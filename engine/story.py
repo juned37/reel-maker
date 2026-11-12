@@ -1,3 +1,4 @@
+
 import json
 import os
 import time
@@ -21,8 +22,14 @@ Return ONLY valid JSON with these fields:
 title, watermark, voice, rate, claims_to_verify, scenes.
 
 Each scene must contain:
-narration, clear, show, visual_query, camera,
+onscreen_title, narration, clear, show, visual_query, camera,
 transition, source_notes.
+
+ON-SCREEN TITLES:
+- Every scene MUST include a concise, non-empty onscreen_title.
+- Keep it between 2 and 6 words where practical.
+- Use a clear editorial chapter heading, not a full sentence.
+- Do not include quotation marks or narration text in the heading.
 
 DOCUMENTARY STRUCTURE:
 - Create 10 to 24 scenes.
@@ -119,7 +126,6 @@ OUTPUT:
 
 
 def call_model(model, prompt, key):
-
     url = (
         "https://generativelanguage.googleapis.com/"
         f"v1beta/models/{model}:generateContent"
@@ -155,9 +161,7 @@ def call_model(model, prompt, key):
     candidates = result.get("candidates", [])
 
     if not candidates:
-        raise RuntimeError(
-            f"{model} returned no candidates."
-        )
+        raise RuntimeError(f"{model} returned no candidates.")
 
     parts = candidates[0].get(
         "content", {}
@@ -177,15 +181,12 @@ def call_model(model, prompt, key):
         )
 
     if not text:
-        raise RuntimeError(
-            f"{model} returned empty text."
-        )
+        raise RuntimeError(f"{model} returned empty text.")
 
     return text
 
 
 def generate_documentary(topic, output, minutes=3):
-
     minutes = float(minutes)
 
     if not 2 <= minutes <= 5:
@@ -196,12 +197,9 @@ def generate_documentary(topic, output, minutes=3):
     key = os.getenv("GEMINI_API_KEY")
 
     if not key:
-        raise RuntimeError(
-            "GEMINI_API_KEY secret is missing."
-        )
+        raise RuntimeError("GEMINI_API_KEY secret is missing.")
 
     target_words = round(minutes * 135)
-
     minimum_words = round(target_words * 0.80)
     maximum_words = round(target_words * 1.20)
 
@@ -225,9 +223,7 @@ def generate_documentary(topic, output, minutes=3):
     for model in dict.fromkeys(
         item for item in models if item
     ):
-
         for attempt in range(2):
-
             try:
                 response_text = call_model(
                     model,
@@ -237,8 +233,6 @@ def generate_documentary(topic, output, minutes=3):
 
                 candidate = json.loads(response_text)
 
-                # Enforce requested duration before accepting
-                # the generated documentary.
                 validate_script(
                     candidate,
                     target_minutes=minutes
@@ -249,7 +243,6 @@ def generate_documentary(topic, output, minutes=3):
                 break
 
             except urllib.error.HTTPError as exc:
-
                 detail = exc.read().decode(
                     "utf-8",
                     "replace"
@@ -259,7 +252,6 @@ def generate_documentary(topic, output, minutes=3):
                     f"{model}: HTTP {exc.code}: {detail}"
                 )
 
-                # A missing model should not be retried.
                 if exc.code == 404:
                     break
 
@@ -272,10 +264,7 @@ def generate_documentary(topic, output, minutes=3):
                 ValueError,
                 RuntimeError
             ) as exc:
-
-                errors.append(
-                    f"{model}: {exc}"
-                )
+                errors.append(f"{model}: {exc}")
 
                 if attempt == 0:
                     time.sleep(3)
@@ -303,7 +292,6 @@ def generate_documentary(topic, output, minutes=3):
 
     data.setdefault("claims_to_verify", [])
 
-    # Validate once more after adding defaults.
     validate_script(
         data,
         target_minutes=minutes
