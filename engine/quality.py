@@ -1,3 +1,4 @@
+
 """Documentary script validation and duration estimation."""
 
 import re
@@ -71,6 +72,20 @@ def validate_script(data, target_minutes=None):
 
         scene["narration"] = narration.strip()
 
+        # Ensure every scene has a visible heading.
+        onscreen_title = scene.get("onscreen_title") or scene.get("label")
+
+        if not isinstance(onscreen_title, str) or not onscreen_title.strip():
+            words_for_title = re.findall(
+                r"[\w’'-]+",
+                scene["narration"]
+            )
+            onscreen_title = " ".join(words_for_title[:6]).strip(
+                " .,:;!?-"
+            )
+
+        scene["onscreen_title"] = onscreen_title.strip()
+
         scene.setdefault("show", [])
         scene.setdefault("clear", True)
         scene.setdefault("camera", "slow_push")
@@ -90,17 +105,21 @@ def validate_script(data, target_minutes=None):
             )
 
         camera = str(scene["camera"]).lower()
+
         if camera not in SUPPORTED_CAMERAS:
             raise ValueError(
                 f"Scene {index}: unsupported camera movement {camera!r}."
             )
+
         scene["camera"] = camera
 
         transition = str(scene["transition"]).lower()
+
         if transition not in SUPPORTED_TRANSITIONS:
             raise ValueError(
                 f"Scene {index}: unsupported transition {transition!r}."
             )
+
         scene["transition"] = transition
 
         if scene.get("image") is not None and not isinstance(
@@ -111,13 +130,20 @@ def validate_script(data, target_minutes=None):
             )
 
     claims = data.setdefault("claims_to_verify", [])
+
     if not isinstance(claims, list):
         raise ValueError("claims_to_verify must be a list.")
 
     if not all(isinstance(item, str) for item in claims):
-        raise ValueError("Every claims_to_verify entry must be a string.")
+        raise ValueError(
+            "Every claims_to_verify entry must be a string."
+        )
 
-    words = sum(count_words(scene["narration"]) for scene in scenes)
+    words = sum(
+        count_words(scene["narration"])
+        for scene in scenes
+    )
+
     estimated_minutes = words / WORDS_PER_MINUTE
 
     data["word_count"] = words
@@ -140,6 +166,7 @@ def validate_script(data, target_minutes=None):
             * WORDS_PER_MINUTE
             * (1 - DURATION_TOLERANCE)
         )
+
         maximum_words = (
             target_minutes
             * WORDS_PER_MINUTE
