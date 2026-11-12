@@ -1,3 +1,4 @@
+
 name: Make vertical documentary video
 
 on:
@@ -104,15 +105,20 @@ jobs:
           VOICE: ${{ inputs.voice }}
           WATERMARK: ${{ inputs.watermark }}
           VISUAL_STYLE: ${{ inputs.visual_style }}
+
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+
         run: |
           set -euo pipefail
           mkdir -p out
 
           if [[ -n "${TOPIC// /}" ]]; then
-            if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-              echo "GEMINI_API_KEY is required to generate a new topic."
+            if [[ -z "${GROQ_API_KEY:-}" && -z "${GEMINI_API_KEY:-}" ]]; then
+              echo "Add GROQ_API_KEY or GEMINI_API_KEY to GitHub Actions secrets."
               exit 1
             fi
 
@@ -207,10 +213,12 @@ jobs:
 
           data = json.loads(result.stdout)
           streams = data.get("streams", [])
+
           video_streams = [
               item for item in streams
               if item.get("codec_type") == "video"
           ]
+
           audio_streams = [
               item for item in streams
               if item.get("codec_type") == "audio"
@@ -245,8 +253,8 @@ jobs:
               sys.exit(f"Video is unexpectedly short: {duration:.1f}s")
 
           print("Video verification passed.")
-          print(f"Resolution: 1080x1920")
-          print(f"Frame rate: 30 FPS")
+          print("Resolution: 1080x1920")
+          print("Frame rate: 30 FPS")
           print(f"Duration: {duration:.2f} seconds")
           print("Video codec: H.264")
           print("Audio codec: AAC")
