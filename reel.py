@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 
 from art import (
     W, H, INK, GOLD, make_base, make_element,
-    parse_spec, FIXED, font
+    parse_spec, FIXED, font, make_background
 )
 from engine.audio import synthesize
 from engine.motion import render_motion
@@ -32,9 +32,9 @@ LEAD_SECONDS = 1.2
 SCENE_GAP_SECONDS = 0.18
 END_SECONDS = 1.0
 
-CAPTION_Y = 1450
-CAPTION_WIDTH = 940
-CAPTION_MAX_WORDS = 8
+CAPTION_Y = 1390
+CAPTION_WIDTH = 900
+CAPTION_MAX_WORDS = 7
 
 
 def run_checked(command: list[str], **kwargs):
@@ -214,6 +214,9 @@ def build_art_elements(scenes, timeline):
             continue
 
         for spec in scene.get("show", []):
+            # Scene headings and timed subtitles replace oversized legacy text art.
+            if str(spec).strip().startswith("text:"):
+                continue
             try:
                 image, (x, y) = make_element(spec)
                 elements.append({
@@ -231,88 +234,60 @@ def build_art_elements(scenes, timeline):
 
 
 def make_fallback_background():
-    """Neutral dark background for scenes without a usable image."""
-    return Image.new("RGB", (WIDTH, HEIGHT), (24, 29, 34))
+    """Warm parchment background used by the editorial illustration style."""
+    return make_background().resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
 
 
 def draw_scene_heading(frame, scene, scene_number):
-    """Draw a small editorial scene label, not a fabricated historical claim."""
+    """Small gold section marker and restrained serif scene heading."""
     label = scene.get("onscreen_title") or scene.get("label")
-
     if not label:
         return
-
     draw = ImageDraw.Draw(frame)
-    heading_font = font(42, True)
-
-    max_width = 900
-    while draw.textlength(str(label), font=heading_font) > max_width:
-        if heading_font.size <= 26:
-            break
-        heading_font = font(heading_font.size - 2, True)
-
-    draw.rounded_rectangle(
-        (60, 105, 1020, 205),
-        radius=24,
-        fill=(12, 16, 20, 190)
-    )
-
-    draw.text(
-        (WIDTH // 2, 155),
-        str(label),
-        font=heading_font,
-        fill=(255, 248, 230),
-        anchor="mm"
-    )
+    kicker = font(25, True)
+    heading = font(54, True)
+    while draw.textlength(str(label), font=heading) > 920 and heading.size > 34:
+        heading = font(heading.size - 2, True)
+    draw.text((WIDTH // 2, 205), f"{scene_number:02d}  •  THE STORY", font=kicker,
+              fill=(154, 119, 65), anchor="mm")
+    draw.text((WIDTH // 2, 285), str(label), font=heading, fill=INK, anchor="mm")
+    draw.line((WIDTH//2-110, 340, WIDTH//2-10, 340), fill=GOLD, width=3)
+    draw.polygon([(WIDTH//2,332),(WIDTH//2+8,340),(WIDTH//2,348),(WIDTH//2-8,340)], fill=GOLD)
+    draw.line((WIDTH//2+10,340,WIDTH//2+110,340), fill=GOLD, width=3)
 
 
 def draw_caption(frame, word_entries, current_time):
-    """Render a compact, timed caption within the central safe area."""
-    active_index = None
-
-    for index, item in enumerate(word_entries):
-        if item[1] <= current_time < item[2]:
-            active_index = index
-            break
-
+    """Editorial serif subtitles: no dark pill, with the spoken word in gold."""
+    active_index = next((i for i, item in enumerate(word_entries)
+                         if item[1] <= current_time < item[2]), None)
     if active_index is None:
         return
-
     start = max(0, active_index - CAPTION_MAX_WORDS + 1)
     selected = word_entries[start:active_index + 1]
-    phrase = " ".join(item[0] for item in selected)
-
     draw = ImageDraw.Draw(frame)
-    caption_font = font(48, True)
-
-    while (
-        draw.textlength(phrase, font=caption_font) > CAPTION_WIDTH
-        and caption_font.size > 32
-    ):
-        caption_font = font(caption_font.size - 2, True)
-
-    box_height = 120
-    box_top = CAPTION_Y
-
-    draw.rounded_rectangle(
-        (
-            55,
-            box_top,
-            WIDTH - 55,
-            box_top + box_height
-        ),
-        radius=24,
-        fill=(8, 12, 16, 220)
-    )
-
-    draw.text(
-        (WIDTH // 2, box_top + box_height // 2),
-        phrase,
-        font=caption_font,
-        fill=(255, 255, 255),
-        anchor="mm",
-        align="center"
-    )
+    f = font(48, True)
+    words = [item[0] for item in selected]
+    # Center each line, keeping the caption airy and readable.
+    lines, line = [], []
+    for word in words:
+        candidate = " ".join(line + [word])
+        if line and draw.textlength(candidate, font=f) > CAPTION_WIDTH:
+            lines.append(line); line = [word]
+        else:
+            line.append(word)
+    if line: lines.append(line)
+    line_height = 64
+    y0 = CAPTION_Y - (len(lines) - 1) * line_height // 2
+    for row, line_words in enumerate(lines):
+        widths = [draw.textlength(w + (" " if i < len(line_words)-1 else ""), font=f)
+                  for i, w in enumerate(line_words)]
+        x = (WIDTH - sum(widths)) / 2
+        y = y0 + row * line_height
+        for word, width in zip(line_words, widths):
+            # Only the currently spoken word receives the gold accent.
+            is_active = word == selected[-1][0] and row == len(lines)-1
+            draw.text((x, y), word, font=f, fill=GOLD if is_active else INK)
+            x += width
 
 
 def apply_art_elements(frame, elements, current_time):
@@ -398,7 +373,7 @@ def render_frame(
     return frame
 
 
-def render(script_path, output_path, provider="edge"):
+def render(script_path, output_path, provider="edge", style=None):
     script_path = Path(script_path)
     output_path = Path(output_path)
 
@@ -409,6 +384,9 @@ def render(script_path, output_path, provider="edge"):
     validate_script(data)
 
     scenes = data["scenes"]
+    style = (style or data.get("visual_style", "editorial")).lower()
+    if style not in {"editorial", "photographic"}:
+        raise ValueError("visual_style must be 'editorial' or 'photographic'.")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     work = Path(tempfile.mkdtemp(prefix="reel-maker-"))
@@ -422,7 +400,9 @@ def render(script_path, output_path, provider="edge"):
             work
         )
 
-        images = load_scene_images(scenes)
+        # Editorial is the default: intentionally ignore downloaded photos so
+        # the parchment + hand-drawn visual identity stays consistent.
+        images = load_scene_images(scenes) if style == "photographic" else [None] * len(scenes)
         art_elements = build_art_elements(scenes, timeline)
         title_card = create_title_card(data)
 
@@ -459,6 +439,9 @@ def render(script_path, output_path, provider="edge"):
 
         total_frames = math.ceil(total_duration * FPS)
         previous_frame = None
+        transition_from = title_card.copy()
+        transition_started = 0.0
+        last_scene_index = -1
         scene_index = 0
 
         try:
@@ -470,6 +453,11 @@ def render(script_path, output_path, provider="edge"):
                     and now >= timeline[scene_index]["end"]
                 ):
                     scene_index += 1
+
+                if scene_index != last_scene_index:
+                    transition_from = previous_frame.copy() if previous_frame is not None else title_card.copy()
+                    transition_started = LEAD_SECONDS if scene_index == 0 else now
+                    last_scene_index = scene_index
 
                 if now < LEAD_SECONDS:
                     frame = title_card.copy()
@@ -501,22 +489,9 @@ def render(script_path, output_path, provider="edge"):
                     draw_caption(frame, words_by_scene[scene_index], now)
 
                     transition = transition_name(scene)
-                    transition_frames = int(0.35 * FPS)
-
-                    if (
-                        previous_frame is not None
-                        and frame_number < LEAD_SECONDS * FPS + transition_frames
-                        and transition == "crossfade"
-                    ):
-                        blend_progress = min(
-                            1.0,
-                            (now - LEAD_SECONDS) / 0.35
-                        )
-                        frame = crossfade(
-                            title_card,
-                            frame,
-                            blend_progress
-                        )
+                    if transition == "crossfade" and now - transition_started < 0.35:
+                        blend_progress = min(1.0, max(0.0, (now - transition_started) / 0.35))
+                        frame = crossfade(transition_from, frame, blend_progress)
 
                 if frame.size != (WIDTH, HEIGHT):
                     frame = frame.resize(
@@ -613,6 +588,10 @@ def main():
         choices=("edge", "espeak"),
         default="edge"
     )
+    render_parser.add_argument(
+        "--style", choices=("editorial", "photographic"),
+        default=None, help="Visual style (default: script visual_style or editorial)."
+    )
 
     args = parser.parse_args()
 
@@ -626,7 +605,8 @@ def main():
         render(
             args.script,
             args.output,
-            args.tts
+            args.tts,
+            args.style
         )
 
 
