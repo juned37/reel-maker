@@ -1,5 +1,5 @@
 
-"""Generate documentary scripts and scene-specific illustration plans."""
+"""Generate documentary scripts using the reusable art.py library."""
 
 import json
 import os
@@ -35,23 +35,11 @@ JSON structure:
       "onscreen_title": "Scene heading",
       "narration": "Spoken narration",
       "clear": true,
-      "show": [],
+      "show": ["book@left", "crescent@right"],
       "visual_query": "",
       "camera": "slow_push",
       "transition": "crossfade",
-      "source_notes": "",
-      "visual_plan": {
-        "elements": [
-          {
-            "type": "line",
-            "points": [[15, 35], [50, 55]],
-            "color": "ink",
-            "width": 5,
-            "draw_at": 0.0,
-            "draw_duration": 0.3
-          }
-        ]
-      }
+      "source_notes": ""
     }
   ]
 }
@@ -67,38 +55,41 @@ NARRATION:
 - Avoid repetition and unsupported claims.
 
 VISUALS:
-- The video uses hand-drawn illustrations, NOT web photographs.
-- Every scene must have its own topic-specific visual_plan.
-- Use 5 to 10 useful drawing elements per scene.
-- Use only these types: line, path, polyline, polygon, arrow,
-  circle, ellipse, rect, text, arc.
-- Use only these colours: ink, gold, paper, pale, muted, blue,
-  green, red, white, dark.
-- Use coordinates from 0 to 100.
-- For line, path, polyline, polygon and arrow, provide points as
-  [x,y] pairs. Arrow requires at least two points.
-- For circle, ellipse, rect and arc, use x, y and size.
-- For text, use x, y and a short text value.
-- Use draw_at and draw_duration between 0 and 1.
-- Keep important content around y=28 to y=68.
-- Prefer recognisable objects, structures, maps, tools and processes.
-- Show relationships and actions described by the narration.
-- Do not fill scenes with random decorative shapes.
-- Keep a consistent warm parchment, dark outline and restrained
-  gold-accent illustration style.
+- The video uses the existing hand-drawn art.py illustration library.
+- Do not use web photographs.
+- Do not create visual_plan objects.
+- Select 1 or 2 objects from the supported asset catalogue per scene.
+- Use the object that best communicates the narration.
+- Use @left, @center or @right to position an object.
+- Do not use the same object in every scene unless narratively necessary.
+- Do not add decorative objects without a narrative reason.
+- Use figures only for generic crowds or groups.
+- Never use figures to represent a named historical or religious person.
+- Use text:TITLE|SUBTITLE sparingly, only when a short label
+  genuinely improves understanding.
+- Avoid using two objects in the same position.
+
+AVAILABLE ILLUSTRATIONS:
+crescent, sun, book, mosque, kaaba, calendar, question,
+hourglass, heart, lantern, globe, prayer_mat, beads, coins,
+water_vessel, dates, minaret, dome, caravan, tent, scroll,
+ship, palace, city_gate, map, compass, mountain, river,
+atom, microscope, telescope, lightbulb, gears, computer,
+ledger, marketplace, inkwell, arches, scale, figures.
 
 TOPIC ADAPTATION:
-Choose visuals that genuinely explain the topic.
-History: period-appropriate places, maps, artefacts and buildings.
-Science: scientific objects, systems and processes.
-Religion: relevant architecture, objects, maps and practices.
-Technology: devices, systems and components.
-Geography: terrain, routes, rivers and locations.
-Other topics: select accurate and meaningful visual metaphors.
+- Religion: use relevant objects, architecture, places and practices.
+- History: use maps, manuscripts, buildings, ships and period objects.
+- Science: use scientific instruments, diagrams and equipment.
+- Geography: use maps, mountains, rivers, globes and navigation tools.
+- Economics: use coins, ledgers, scales and marketplaces.
+- Technology: use computers, gears and relevant equipment.
+- Other topics: choose the closest accurate visual metaphor.
 
 ISLAMIC CONTENT AND HISTORICAL SAFEGUARDS:
 - Never depict Prophet Muhammad ﷺ in any form, including silhouette,
   shadow or symbolic human representation.
+- Never use figures to represent Prophet Muhammad ﷺ or any named prophet.
 - Do not invent portraits or appearances of historical people.
 - Do not present imagined reconstructions as historical evidence.
 - Avoid anachronistic clothing, objects and buildings.
@@ -108,7 +99,8 @@ ISLAMIC CONTENT AND HISTORICAL SAFEGUARDS:
 
 FIELDS:
 - clear must be true.
-- show must be an empty list.
+- show must be a list of supported art.py object specifications.
+- Use no more than 2 illustrations per scene.
 - visual_query is only for backward compatibility.
 - camera must be slow_push, pan_left, pan_right, pan_up or pan_down.
 - transition must be crossfade or cut.
@@ -152,13 +144,11 @@ def extract_json(response_text):
 
         text = "\n".join(lines).strip()
 
-    # First try parsing the complete response.
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Then try extracting the outer JSON object.
     start = text.find("{")
     end = text.rfind("}")
 
@@ -180,7 +170,7 @@ def read_http_error(exc):
 
 
 def retry_delay(exc, default=12):
-    """Read Retry-After or the wait time from a provider error."""
+    """Read Retry-After or wait time from a provider error."""
     headers = getattr(exc, "headers", None)
 
     if headers:
@@ -254,8 +244,8 @@ def call_groq(model, prompt, key):
 
     if choice.get("finish_reason") == "length":
         raise RuntimeError(
-            "Groq output was truncated. Increase the output token limit "
-            "or simplify the requested visual plans."
+            "Groq output was truncated. Increase the output token "
+            "limit or simplify the requested storyboard."
         )
 
     content = choice.get("message", {}).get("content")
@@ -310,9 +300,7 @@ def call_gemini(model, prompt, key):
 
     candidate = candidates[0]
 
-    finish_reason = candidate.get("finishReason", "")
-
-    if finish_reason == "MAX_TOKENS":
+    if candidate.get("finishReason") == "MAX_TOKENS":
         raise RuntimeError(
             "Gemini output was truncated by the token limit."
         )
@@ -336,7 +324,6 @@ def provider_configuration():
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
 
-    # Gemini is the primary provider.
     if gemini_key:
         providers.append({
             "name": "Gemini",
@@ -348,7 +335,6 @@ def provider_configuration():
             "call": call_gemini,
         })
 
-    # Groq is the fallback provider.
     if groq_key:
         providers.append({
             "name": "Groq",
@@ -364,29 +350,93 @@ def provider_configuration():
 
 
 def validate_generated_script(candidate, minutes):
+    from art import ELEMENTS, FIXED, parse_spec
+
+    if not isinstance(candidate, dict):
+        raise ValueError("Generated script must be a JSON object.")
+
+    scenes = candidate.get("scenes")
+
+    if not isinstance(scenes, list):
+        raise ValueError("Generated script must contain a scenes list.")
+
+    # Remove legacy visual plans. The illustrated renderer uses art.py.
+    for scene in scenes:
+        if isinstance(scene, dict):
+            scene.pop("visual_plan", None)
+
     validate_script(
         candidate,
         target_minutes=minutes,
     )
 
-    missing = []
-
     for index, scene in enumerate(candidate["scenes"], 1):
-        if not isinstance(scene.get("visual_plan"), dict):
-            missing.append(index)
+        show = scene.get("show", [])
 
-    if missing:
-        raise ValueError(
-            "Missing visual_plan in scene(s): "
-            + ", ".join(map(str, missing))
-        )
+        if not isinstance(show, list):
+            raise ValueError(
+                f"Scene {index}: show must be a list."
+            )
+
+        if len(show) > 2:
+            raise ValueError(
+                f"Scene {index}: use no more than 2 illustrations."
+            )
+
+        used_positions = set()
+        used_names = set()
+
+        for spec in show:
+            if not isinstance(spec, str):
+                raise ValueError(
+                    f"Scene {index}: illustration specs must be strings."
+                )
+
+            name, arg, position = parse_spec(spec)
+
+            if name not in ELEMENTS:
+                raise ValueError(
+                    f"Scene {index}: unsupported illustration '{name}'."
+                )
+
+            if position in used_positions:
+                raise ValueError(
+                    f"Scene {index}: two illustrations use the same "
+                    f"position '{position}'."
+                )
+
+            if name in used_names:
+                raise ValueError(
+                    f"Scene {index}: duplicate illustration '{name}'."
+                )
+
+            used_positions.add(position)
+            used_names.add(name)
+
+            if name in FIXED and len(show) > 1:
+                raise ValueError(
+                    f"Scene {index}: '{name}' is a fixed-position "
+                    "illustration and must be used alone."
+                )
+
+            if name == "figures":
+                try:
+                    count = int(arg or 3)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Scene {index}: figures count must be an integer."
+                    ) from exc
+
+                if not 1 <= count <= 6:
+                    raise ValueError(
+                        f"Scene {index}: figures count must be from 1 to 6."
+                    )
 
     return candidate
 
 
 def generate_with_provider(provider, prompt, minutes):
     errors = []
-
     attempt_prompt = prompt
 
     for attempt in range(3):
@@ -418,7 +468,6 @@ def generate_with_provider(provider, prompt, minutes):
                 f"HTTP {exc.code}: {detail}"
             )
 
-            # Retry rate limits using the provider's suggested wait.
             if exc.code == 429 and attempt < 2:
                 delay = retry_delay(exc)
 
@@ -430,7 +479,6 @@ def generate_with_provider(provider, prompt, minutes):
                 time.sleep(delay)
                 continue
 
-            # Temporary server errors.
             if exc.code in (408, 500, 502, 503, 504) and attempt < 2:
                 time.sleep(5 * (attempt + 1))
                 continue
@@ -446,17 +494,18 @@ def generate_with_provider(provider, prompt, minutes):
             errors.append(str(exc))
 
             if attempt < 2:
-                # Give the provider a more explicit correction instruction.
                 attempt_prompt = (
                     prompt
                     + "\n\nIMPORTANT CORRECTION:\n"
                     "Your previous response did not pass validation. "
                     "Return a complete valid JSON object. "
                     "Do not shorten the narration. "
-                    "Meet the requested total word count exactly within "
-                    "the specified acceptable range. "
-                    "Every scene must contain a valid visual_plan. "
-                    "Use only supported visual element types. "
+                    "Meet the requested total word count within the "
+                    "specified acceptable range. "
+                    "Every scene must contain a show list using only "
+                    "supported art.py illustration names. "
+                    "Use no more than 2 illustrations per scene. "
+                    "Do not include visual_plan. "
                     "Do not add Markdown or explanations."
                 )
 
@@ -529,20 +578,9 @@ def generate_documentary(topic, output, minutes=3):
         os.getenv("VOICE", "en-US-GuyNeural"),
     )
 
-    data.setdefault(
-        "rate",
-        "-3%",
-    )
-
-    data.setdefault(
-        "watermark",
-        os.getenv("WATERMARK", ""),
-    )
-
-    data.setdefault(
-        "claims_to_verify",
-        [],
-    )
+    data.setdefault("rate", "-3%")
+    data.setdefault("watermark", os.getenv("WATERMARK", ""))
+    data.setdefault("claims_to_verify", [])
 
     data["visual_style"] = "illustrated"
 
@@ -552,11 +590,7 @@ def generate_documentary(topic, output, minutes=3):
     )
 
     path = Path(output)
-
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(
         json.dumps(
