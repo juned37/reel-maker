@@ -1,8 +1,8 @@
+
 #!/usr/bin/env python3
 """Vertical documentary video generator for Reels and YouTube Shorts."""
 
 from __future__ import annotations
-from engine.image_generator import generate_scene_images
 
 import argparse
 import json
@@ -24,6 +24,7 @@ from engine.transitions import transition_name, crossfade
 from engine.quality import validate_script
 from engine.story import generate_documentary
 from engine.illustrations import render_visual_plan
+from engine.image_generator import generate_scene_images
 
 
 WIDTH = 1080
@@ -112,7 +113,11 @@ def build_audio(scenes, voice, rate, provider, work):
         )
 
         speech_duration = probe_duration(Path(audio_path))
-        gap = END_SECONDS if index == len(scenes) - 1 else SCENE_GAP_SECONDS
+        gap = (
+            END_SECONDS
+            if index == len(scenes) - 1
+            else SCENE_GAP_SECONDS
+        )
         segment_duration = speech_duration + gap
         normalized = work / f"segment-{index:03d}.wav"
 
@@ -242,7 +247,10 @@ def draw_scene_heading(frame, scene, scene_number):
     kicker = font(25, True)
     heading = font(54, True)
 
-    while draw.textlength(str(label), font=heading) > 920 and heading.size > 34:
+    while (
+        draw.textlength(str(label), font=heading) > 920
+        and heading.size > 34
+    ):
         heading = font(heading.size - 2, True)
 
     draw.text(
@@ -408,17 +416,24 @@ def render_scene_frame(
     )
 
     frame = make_fallback_background()
+    image = images[scene_index]
 
-    if style == "photographic" and images[scene_index] is not None:
-        render_motion(frame, images[scene_index], progress, scene)
+    # Cinematic and photographic modes use image-based camera motion.
+    if image is not None and style in {"cinematic", "photographic"}:
+        render_motion(frame, image, progress, scene)
+
+        # Hybrid vector elements are drawn over the scene artwork.
+        plan = scene.get("visual_plan")
+        if plan:
+            frame = render_visual_plan(frame, plan, progress)
 
     else:
+        # Use vector plans or legacy hand-drawn illustrations as fallback.
         plan = scene.get("visual_plan")
 
         if plan:
             frame = render_visual_plan(frame, plan, progress)
         else:
-            # Only the current scene's illustrations are rendered.
             apply_legacy_art(
                 frame,
                 art_elements[scene_index],
@@ -444,9 +459,25 @@ def render(script_path, output_path, provider="edge", style=None):
     scenes = data["scenes"]
     style = (style or data.get("visual_style", "illustrated")).lower()
 
-    if style not in {"illustrated", "editorial", "photographic"}:
+    if style not in {
+        "illustrated",
+        "editorial",
+        "photographic",
+        "cinematic"
+    }:
         raise ValueError(
-            "Visual style must be illustrated, editorial or photographic."
+            "Visual style must be illustrated, editorial, "
+            "photographic or cinematic."
+        )
+
+    # Generate unique AI artwork for every scene in cinematic mode.
+    if style == "cinematic":
+        generate_scene_images(data, script_path)
+
+        # Save image paths so subsequent renders can reuse cached artwork.
+        script_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8"
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -461,10 +492,12 @@ def render(script_path, output_path, provider="edge", style=None):
             work
         )
 
-        # Illustrated mode deliberately ignores downloaded web photographs.
+        # Cinematic uses generated scene artwork.
+        # Photographic uses externally prepared images.
+        # Illustrated/editorial retain the existing vector renderer.
         images = (
             load_scene_images(scenes)
-            if style == "photographic"
+            if style in {"cinematic", "photographic"}
             else [None] * len(scenes)
         )
 
@@ -669,7 +702,12 @@ def main():
     )
     render_parser.add_argument(
         "--style",
-        choices=("illustrated", "editorial", "photographic"),
+        choices=(
+            "illustrated",
+            "editorial",
+            "photographic",
+            "cinematic"
+        ),
         default=None,
         help="Visual style (default: illustrated)."
     )
