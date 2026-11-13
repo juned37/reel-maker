@@ -41,11 +41,120 @@ def _normalise_title(title):
     return []
 
 
+def _validate_visual_plan(plan, scene_number):
+    if not isinstance(plan, dict):
+        raise ValueError(
+            f"Scene {scene_number}: visual_plan must be an object."
+        )
+
+    elements = plan.get("elements")
+
+    if not isinstance(elements, list):
+        raise ValueError(
+            f"Scene {scene_number}: visual_plan.elements must be a list."
+        )
+
+    if len(elements) > 35:
+        raise ValueError(
+            f"Scene {scene_number}: maximum 35 visual elements allowed."
+        )
+
+    allowed = {
+        "line", "path", "polyline", "polygon",
+        "circle", "ellipse", "rect", "text", "arc",
+    }
+
+    for element_number, element in enumerate(elements, 1):
+        if not isinstance(element, dict):
+            raise ValueError(
+                f"Scene {scene_number}, element {element_number}: "
+                "must be an object."
+            )
+
+        kind = str(element.get("type", "")).lower()
+
+        if kind not in allowed:
+            raise ValueError(
+                f"Scene {scene_number}, element {element_number}: "
+                f"unsupported drawing type {kind!r}."
+            )
+
+        for key in ("draw_at", "draw_duration"):
+            if key in element:
+                try:
+                    value = float(element[key])
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"Scene {scene_number}: {key} must be numeric."
+                    )
+
+                if not 0 <= value <= 1:
+                    raise ValueError(
+                        f"Scene {scene_number}: {key} must be between 0 and 1."
+                    )
+
+        if kind in ("line", "path", "polyline", "polygon"):
+            points = element.get("points")
+            minimum = 3 if kind == "polygon" else 2
+
+            if not isinstance(points, list) or len(points) < minimum:
+                raise ValueError(
+                    f"Scene {scene_number}: {kind} needs at least "
+                    f"{minimum} points."
+                )
+
+            for point in points:
+                if (
+                    not isinstance(point, (list, tuple))
+                    or len(point) != 2
+                    or not all(
+                        isinstance(v, (int, float)) and 0 <= v <= 100
+                        for v in point
+                    )
+                ):
+                    raise ValueError(
+                        f"Scene {scene_number}: drawing points must be "
+                        "numeric [x, y] pairs between 0 and 100."
+                    )
+
+        if kind in ("circle", "ellipse", "rect", "arc"):
+            for key, default in (
+                ("x", 50),
+                ("y", 50),
+                ("size", 10),
+            ):
+                try:
+                    value = float(element.get(key, default))
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"Scene {scene_number}: {key} must be numeric."
+                    )
+
+                if not 0 <= value <= 100:
+                    raise ValueError(
+                        f"Scene {scene_number}: {key} must be between 0 and 100."
+                    )
+
+        if kind == "text":
+            label = element.get("text", element.get("label", ""))
+
+            if not isinstance(label, str):
+                raise ValueError(
+                    f"Scene {scene_number}: text element needs a string."
+                )
+
+            if len(label) > 100:
+                raise ValueError(
+                    f"Scene {scene_number}: text elements are limited to 100 characters."
+                )
+
+
 def validate_script(data, target_minutes=None):
     if not isinstance(data, dict):
         raise ValueError("Script must be a JSON object.")
 
     title = _normalise_title(data.get("title"))
+
     if not title:
         raise ValueError(
             "title must be a non-empty string or a list of strings."
@@ -54,6 +163,7 @@ def validate_script(data, target_minutes=None):
     data["title"] = title
 
     scenes = data.get("scenes")
+
     if not isinstance(scenes, list) or not scenes:
         raise ValueError("scenes must be a non-empty list.")
 
@@ -65,6 +175,7 @@ def validate_script(data, target_minutes=None):
             raise ValueError(f"Scene {index} must be a JSON object.")
 
         narration = scene.get("narration")
+
         if not isinstance(narration, str) or not narration.strip():
             raise ValueError(
                 f"Scene {index} must contain non-empty narration."
@@ -72,7 +183,6 @@ def validate_script(data, target_minutes=None):
 
         scene["narration"] = narration.strip()
 
-        # Ensure every scene has a visible heading.
         onscreen_title = scene.get("onscreen_title") or scene.get("label")
 
         if not isinstance(onscreen_title, str) or not onscreen_title.strip():
@@ -128,6 +238,10 @@ def validate_script(data, target_minutes=None):
             raise ValueError(
                 f"Scene {index}: image must be a path string or null."
             )
+
+        # Older scripts remain valid. New scripts should include visual_plan.
+        if "visual_plan" in scene:
+            _validate_visual_plan(scene["visual_plan"], index)
 
     claims = data.setdefault("claims_to_verify", [])
 
