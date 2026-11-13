@@ -1,4 +1,3 @@
-
 """art.py - illustration library and visual styling for Reel Maker."""
 
 import math
@@ -66,9 +65,21 @@ class Art:
         )
 
     def poly(self, pts, fill=PAPER, w=4):
-        self.d.polygon(self.s(pts), fill=fill)
+        """Draw a polygon from (x, y) coordinate pairs."""
+        scaled_points = [
+            (x * SS, y * SS)
+            for x, y in pts
+        ]
+
+        self.d.polygon(scaled_points, fill=fill)
+
         if w:
-            self.line(pts + pts[:2], w)
+            outline_points = [
+                coordinate
+                for point in (pts + pts[:2])
+                for coordinate in point
+            ]
+            self.line(outline_points, w)
 
     def rect(self, x0, y0, x1, y1, fill=PAPER, w=4):
         self.d.rectangle(
@@ -947,7 +958,6 @@ SLOT_X = {
     "right": 790,
 }
 
-# FIX: asset names can contain underscores, e.g. prayer_mat.
 SPEC = re.compile(
     r"^([a-z_]+)(?::(.*?))?(?:@(left|center|right))?$"
 )
