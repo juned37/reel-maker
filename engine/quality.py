@@ -1,4 +1,3 @@
-
 """Documentary script validation and duration estimation."""
 
 import re
@@ -121,8 +120,8 @@ def validate_show_elements(show, scene_number):
 
         if len(non_text_names) > 1:
             raise ValueError(
-                f"Scene {scene_number}: fixed illustrations "
-                "must be used alone or with text overlays."
+                f"Scene {scene_number}: fixed illustration "
+                "must be used on its own or with text overlays."
             )
 
     for spec, name, argument, position in parsed_specs:
