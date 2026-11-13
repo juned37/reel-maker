@@ -44,11 +44,12 @@ on:
         type: string
 
       visual_style:
-        description: "Editorial matches the parchment/line-art reference; photographic uses Wikimedia images"
+        description: "Illustrated documentary style"
         required: false
-        default: "editorial"
+        default: "illustrated"
         type: choice
         options:
+          - "illustrated"
           - "editorial"
           - "photographic"
 
