@@ -1,3 +1,4 @@
+
 """Documentary script validation and duration estimation."""
 
 import re
@@ -49,8 +50,12 @@ def validate_show_elements(show, scene_number):
     """
     Validate and smoke-build every art.py illustration specification.
 
-    This catches invalid names, malformed specifications and illustration
-    builder errors before the renderer starts generating audio/video.
+    Text elements may share a position with an illustration because they
+    are intended to work as overlays. Two non-text illustrations may not
+    occupy the same position.
+
+    Fixed illustrations may be combined with text overlays, but not with
+    other illustrations.
     """
     if not isinstance(show, list):
         raise ValueError(
@@ -64,6 +69,10 @@ def validate_show_elements(show, scene_number):
 
     used_positions = set()
     used_names = set()
+    has_fixed = False
+    has_non_text_illustration = False
+
+    parsed_specs = []
 
     for spec in show:
         try:
@@ -79,23 +88,44 @@ def validate_show_elements(show, scene_number):
                 f"Scene {scene_number}: unsupported illustration {name!r}."
             )
 
-        if position in used_positions:
-            raise ValueError(
-                f"Scene {scene_number}: more than one illustration "
-                f"uses the {position!r} position."
-            )
-
         if name in used_names:
             raise ValueError(
                 f"Scene {scene_number}: duplicate illustration {name!r}."
             )
 
-        if name in FIXED and len(show) > 1:
+        is_text = name == "text"
+        is_fixed = name in FIXED
+
+        if not is_text:
+            if position in used_positions:
+                raise ValueError(
+                    f"Scene {scene_number}: more than one illustration "
+                    f"uses the {position!r} position."
+                )
+
+            used_positions.add(position)
+            has_non_text_illustration = True
+
+        if is_fixed:
+            has_fixed = True
+
+        parsed_specs.append((spec, name, argument, position))
+        used_names.add(name)
+
+    if has_fixed and has_non_text_illustration:
+        non_text_names = [
+            name
+            for _, name, _, _ in parsed_specs
+            if name != "text"
+        ]
+
+        if len(non_text_names) > 1:
             raise ValueError(
-                f"Scene {scene_number}: fixed illustration {name!r} "
-                "must be used on its own."
+                f"Scene {scene_number}: fixed illustrations "
+                "must be used alone or with text overlays."
             )
 
+    for spec, name, argument, position in parsed_specs:
         if name == "figures":
             try:
                 count = int(argument or 3)
@@ -140,9 +170,6 @@ def validate_show_elements(show, scene_number):
                 f"Scene {scene_number}: illustration {spec!r} "
                 f"could not be built: {exc}"
             ) from exc
-
-        used_positions.add(position)
-        used_names.add(name)
 
 
 def validate_script(data, target_minutes=None):
