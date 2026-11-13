@@ -2,6 +2,7 @@
 """Vertical documentary video generator for Reels and YouTube Shorts."""
 
 from __future__ import annotations
+from engine.image_generator import generate_scene_images
 
 import argparse
 import json
