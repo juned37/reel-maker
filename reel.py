@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Vertical documentary video generator for Reels and YouTube Shorts."""
 
@@ -22,6 +23,7 @@ from engine.motion import render_motion
 from engine.transitions import transition_name, crossfade
 from engine.quality import validate_script
 from engine.story import generate_documentary
+from engine.illustrations import render_visual_plan
 
 
 WIDTH = 1080
@@ -34,18 +36,16 @@ END_SECONDS = 1.0
 
 CAPTION_Y = 1390
 CAPTION_WIDTH = 900
-CAPTION_MAX_WORDS = 7
+CAPTION_MAX_WORDS = 8
 
 
-def run_checked(command: list[str], **kwargs):
-    """Run a command and raise a useful error if it fails."""
+def run_checked(command, **kwargs):
     result = subprocess.run(
         command,
         capture_output=True,
         text=True,
         **kwargs
     )
-
     if result.returncode != 0:
         raise RuntimeError(
             "Command failed:\n"
@@ -53,24 +53,20 @@ def run_checked(command: list[str], **kwargs):
             + "\n\n"
             + (result.stderr or result.stdout or "No error output")
         )
-
     return result
 
 
-def probe_duration(path: Path) -> float:
+def probe_duration(path):
     result = run_checked([
-        "ffprobe",
-        "-v", "error",
+        "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(path)
     ])
-
     return float(result.stdout.strip())
 
 
 def word_bounds(words, bounds, duration):
-    """Use speech timing when available; otherwise estimate by word length."""
     if bounds and len(bounds) == len(words):
         return bounds
 
@@ -78,7 +74,6 @@ def word_bounds(words, bounds, duration):
     total = sum(weights) or 1
     cursor = 0
     output = []
-
     usable = max(0.1, duration - 0.05)
 
     for weight in weights:
@@ -90,24 +85,18 @@ def word_bounds(words, bounds, duration):
     return output
 
 
-def build_audio(scenes, voice, rate, provider, work: Path):
-    """Create one narration track and a matching scene/word timeline."""
+def build_audio(scenes, voice, rate, provider, work):
     tracks = []
     timeline = []
     current_time = LEAD_SECONDS
 
     lead = work / "lead.wav"
-
     run_checked([
         "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "lavfi",
-        "-i", "anullsrc=r=44100:cl=mono",
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
         "-t", str(LEAD_SECONDS),
-        "-ar", "44100",
-        "-ac", "1",
-        str(lead)
+        "-ar", "44100", "-ac", "1", str(lead)
     ])
-
     tracks.append(lead)
 
     for index, scene in enumerate(scenes):
@@ -123,13 +112,7 @@ def build_audio(scenes, voice, rate, provider, work: Path):
         )
 
         speech_duration = probe_duration(Path(audio_path))
-
-        gap = (
-            END_SECONDS
-            if index == len(scenes) - 1
-            else SCENE_GAP_SECONDS
-        )
-
+        gap = END_SECONDS if index == len(scenes) - 1 else SCENE_GAP_SECONDS
         segment_duration = speech_duration + gap
         normalized = work / f"segment-{index:03d}.wav"
 
@@ -138,11 +121,9 @@ def build_audio(scenes, voice, rate, provider, work: Path):
             "-i", str(audio_path),
             "-af", "apad",
             "-t", f"{segment_duration:.3f}",
-            "-ar", "44100",
-            "-ac", "1",
+            "-ar", "44100", "-ac", "1",
             str(normalized)
         ])
-
         tracks.append(normalized)
 
         timed_words = [
@@ -159,7 +140,6 @@ def build_audio(scenes, voice, rate, provider, work: Path):
             "end": current_time + segment_duration,
             "words": timed_words
         })
-
         current_time += segment_duration
 
     concat_file = work / "audio-list.txt"
@@ -172,11 +152,9 @@ def build_audio(scenes, voice, rate, provider, work: Path):
     )
 
     combined = work / "combined.wav"
-
     run_checked([
         "ffmpeg", "-y", "-loglevel", "error",
-        "-f", "concat",
-        "-safe", "0",
+        "-f", "concat", "-safe", "0",
         "-i", str(concat_file),
         "-c:a", "pcm_s16le",
         str(combined)
@@ -187,34 +165,26 @@ def build_audio(scenes, voice, rate, provider, work: Path):
 
 def load_scene_images(scenes):
     images = []
-
     for scene in scenes:
         image_path = scene.get("image")
-
         if not image_path:
             images.append(None)
             continue
-
         try:
             with Image.open(image_path) as source:
                 images.append(source.convert("RGB").copy())
         except (OSError, TypeError, ValueError):
             print(f"WARNING: Could not open scene image: {image_path}")
             images.append(None)
-
     return images
 
 
-def build_art_elements(scenes, timeline):
-    """Prepare optional illustrations for scenes without photographs."""
+def build_legacy_art_elements(scenes, timeline):
+    """Retain support for old scripts using art.py show elements."""
     elements = []
 
     for scene, timing in zip(scenes, timeline):
-        if scene.get("image"):
-            continue
-
         for spec in scene.get("show", []):
-            # Scene headings and timed subtitles replace oversized legacy text art.
             if str(spec).strip().startswith("text:"):
                 continue
             try:
@@ -228,76 +198,128 @@ def build_art_elements(scenes, timeline):
                     "floating": parse_spec(spec)[0] not in FIXED
                 })
             except Exception as exc:
-                print(f"WARNING: Could not create illustration {spec!r}: {exc}")
+                print(f"WARNING: Could not create legacy art {spec!r}: {exc}")
 
     return elements
 
 
 def make_fallback_background():
-    """Warm parchment background used by the editorial illustration style."""
-    return make_background().resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    return make_background().resize(
+        (WIDTH, HEIGHT),
+        Image.Resampling.LANCZOS
+    )
 
 
 def draw_scene_heading(frame, scene, scene_number):
-    """Small gold section marker and restrained serif scene heading."""
     label = scene.get("onscreen_title") or scene.get("label")
     if not label:
         return
+
     draw = ImageDraw.Draw(frame)
     kicker = font(25, True)
     heading = font(54, True)
+
     while draw.textlength(str(label), font=heading) > 920 and heading.size > 34:
         heading = font(heading.size - 2, True)
-    draw.text((WIDTH // 2, 205), f"{scene_number:02d}  •  THE STORY", font=kicker,
-              fill=(154, 119, 65), anchor="mm")
-    draw.text((WIDTH // 2, 285), str(label), font=heading, fill=INK, anchor="mm")
-    draw.line((WIDTH//2-110, 340, WIDTH//2-10, 340), fill=GOLD, width=3)
-    draw.polygon([(WIDTH//2,332),(WIDTH//2+8,340),(WIDTH//2,348),(WIDTH//2-8,340)], fill=GOLD)
-    draw.line((WIDTH//2+10,340,WIDTH//2+110,340), fill=GOLD, width=3)
+
+    draw.text(
+        (WIDTH // 2, 205),
+        f"{scene_number:02d}  •  THE STORY",
+        font=kicker,
+        fill=(154, 119, 65),
+        anchor="mm"
+    )
+    draw.text(
+        (WIDTH // 2, 285),
+        str(label),
+        font=heading,
+        fill=INK,
+        anchor="mm"
+    )
+    draw.line((WIDTH // 2 - 110, 340, WIDTH // 2 - 10, 340), fill=GOLD, width=3)
+    draw.polygon([
+        (WIDTH // 2, 332),
+        (WIDTH // 2 + 8, 340),
+        (WIDTH // 2, 348),
+        (WIDTH // 2 - 8, 340)
+    ], fill=GOLD)
+    draw.line((WIDTH // 2 + 10, 340, WIDTH // 2 + 110, 340), fill=GOLD, width=3)
+
+
+def group_caption_phrases(word_entries):
+    phrases = []
+    current = []
+
+    for item in word_entries:
+        current.append(item)
+        word = item[0].rstrip("\"'”’)]}")
+
+        sentence_end = word.endswith((".", "?", "!", ";", ":"))
+        if sentence_end or len(current) >= CAPTION_MAX_WORDS:
+            phrases.append(current)
+            current = []
+
+    if current:
+        phrases.append(current)
+
+    return phrases
 
 
 def draw_caption(frame, word_entries, current_time):
-    """Editorial serif subtitles: no dark pill, with the spoken word in gold."""
-    active_index = next((i for i, item in enumerate(word_entries)
-                         if item[1] <= current_time < item[2]), None)
-    if active_index is None:
+    """Display a fixed phrase until the next phrase begins."""
+    phrases = group_caption_phrases(word_entries)
+    active = None
+
+    for phrase in phrases:
+        start = phrase[0][1]
+        end = phrase[-1][2]
+        if start <= current_time < end:
+            active = phrase
+            break
+
+    if active is None:
         return
-    start = max(0, active_index - CAPTION_MAX_WORDS + 1)
-    selected = word_entries[start:active_index + 1]
+
     draw = ImageDraw.Draw(frame)
-    f = font(48, True)
-    words = [item[0] for item in selected]
-    # Center each line, keeping the caption airy and readable.
-    lines, line = [], []
+    caption_font = font(46, True)
+    words = [item[0] for item in active]
+
+    lines = []
+    current_line = ""
+
     for word in words:
-        candidate = " ".join(line + [word])
-        if line and draw.textlength(candidate, font=f) > CAPTION_WIDTH:
-            lines.append(line); line = [word]
+        candidate = f"{current_line} {word}".strip()
+        if current_line and draw.textlength(candidate, font=caption_font) > CAPTION_WIDTH:
+            lines.append(current_line)
+            current_line = word
         else:
-            line.append(word)
-    if line: lines.append(line)
-    line_height = 64
-    y0 = CAPTION_Y - (len(lines) - 1) * line_height // 2
-    for row, line_words in enumerate(lines):
-        widths = [draw.textlength(w + (" " if i < len(line_words)-1 else ""), font=f)
-                  for i, w in enumerate(line_words)]
-        x = (WIDTH - sum(widths)) / 2
-        y = y0 + row * line_height
-        for word, width in zip(line_words, widths):
-            # Only the currently spoken word receives the gold accent.
-            is_active = word == selected[-1][0] and row == len(lines)-1
-            draw.text((x, y), word, font=f, fill=GOLD if is_active else INK)
-            x += width
+            current_line = candidate
+
+    if current_line:
+        lines.append(current_line)
+
+    lines = lines[:2]
+    line_height = 62
+    first_y = CAPTION_Y - (len(lines) - 1) * line_height / 2
+
+    for index, line in enumerate(lines):
+        draw.text(
+            (WIDTH // 2, first_y + index * line_height),
+            line,
+            font=caption_font,
+            fill=INK,
+            anchor="mm",
+            align="center"
+        )
 
 
-def apply_art_elements(frame, elements, current_time):
+def apply_legacy_art(frame, elements, current_time):
     for item in elements:
         if current_time < item["show"] or current_time >= item["hide"]:
             continue
 
         image = item["image"]
         alpha = min(1.0, (current_time - item["show"]) / 0.5)
-
         if alpha <= 0:
             continue
 
@@ -309,67 +331,46 @@ def apply_art_elements(frame, elements, current_time):
             )
             image.putalpha(channel)
 
-        dy = 0
-        if item["floating"]:
-            dy = int(math.sin(current_time * 1.4) * 4)
-
-        frame.paste(
-            image,
-            (item["x"], item["y"] + dy),
-            image
-        )
+        dy = int(math.sin(current_time * 1.4) * 4) if item["floating"] else 0
+        frame.paste(image, (item["x"], item["y"] + dy), image)
 
 
 def create_title_card(data):
-    """Use the repository's existing artwork as a separate opening card."""
-    card = make_base(data).convert("RGB")
-    return card.resize((WIDTH, HEIGHT), Image.Resampling.LANCZOS)
+    return make_base(data).convert("RGB").resize(
+        (WIDTH, HEIGHT),
+        Image.Resampling.LANCZOS
+    )
 
 
-def render_frame(
+def render_scene_frame(
     scene_index,
     now,
     scenes,
     images,
     timeline,
     art_elements,
-    previous_scene_frame,
-    title_card
+    words_by_scene,
+    style
 ):
     scene = scenes[scene_index]
     timing = timeline[scene_index]
+    span = max(0.1, timing["speech_end"] - timing["start"])
+    progress = min(1.0, max(0.0, (now - timing["start"]) / span))
 
-    if now < LEAD_SECONDS:
-        frame = title_card.copy()
-        return frame
+    frame = make_fallback_background()
 
-    if images[scene_index] is not None:
-        span = max(0.1, timing["speech_end"] - timing["start"])
-        progress = min(
-            1.0,
-            max(0.0, (now - timing["start"]) / span)
-        )
-
-        frame = make_fallback_background()
-        render_motion(
-            frame,
-            images[scene_index],
-            progress,
-            scene
-        )
+    if style == "photographic" and images[scene_index] is not None:
+        render_motion(frame, images[scene_index], progress, scene)
     else:
-        frame = make_fallback_background()
-        apply_art_elements(frame, art_elements, now)
+        plan = scene.get("visual_plan")
+        if plan:
+            frame = render_visual_plan(frame, plan, progress)
+        else:
+            # Backward compatibility for older JSON scripts.
+            apply_legacy_art(frame, art_elements, now)
 
     draw_scene_heading(frame, scene, scene_index + 1)
-
-    all_words = [
-        word
-        for item in timeline
-        for word in item["words"]
-    ]
-    draw_caption(frame, all_words, now)
-
+    draw_caption(frame, words_by_scene[scene_index], now)
     return frame
 
 
@@ -384,11 +385,14 @@ def render(script_path, output_path, provider="edge", style=None):
     validate_script(data)
 
     scenes = data["scenes"]
-    style = (style or data.get("visual_style", "editorial")).lower()
-    if style not in {"editorial", "photographic"}:
-        raise ValueError("visual_style must be 'editorial' or 'photographic'.")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    style = (style or data.get("visual_style", "illustrated")).lower()
 
+    if style not in {"illustrated", "editorial", "photographic"}:
+        raise ValueError(
+            "Visual style must be illustrated, editorial or photographic."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="reel-maker-"))
 
     try:
@@ -400,12 +404,10 @@ def render(script_path, output_path, provider="edge", style=None):
             work
         )
 
-        # Editorial is the default: intentionally ignore downloaded photos so
-        # the parchment + hand-drawn visual identity stays consistent.
+        # Illustrated mode deliberately ignores downloaded web photographs.
         images = load_scene_images(scenes) if style == "photographic" else [None] * len(scenes)
-        art_elements = build_art_elements(scenes, timeline)
+        art_elements = build_legacy_art_elements(scenes, timeline)
         title_card = create_title_card(data)
-
         words_by_scene = [item["words"] for item in timeline]
 
         command = [
@@ -455,43 +457,42 @@ def render(script_path, output_path, provider="edge", style=None):
                     scene_index += 1
 
                 if scene_index != last_scene_index:
-                    transition_from = previous_frame.copy() if previous_frame is not None else title_card.copy()
+                    transition_from = (
+                        previous_frame.copy()
+                        if previous_frame is not None
+                        else title_card.copy()
+                    )
                     transition_started = LEAD_SECONDS if scene_index == 0 else now
                     last_scene_index = scene_index
 
                 if now < LEAD_SECONDS:
                     frame = title_card.copy()
                 else:
-                    timing = timeline[scene_index]
+                    frame = render_scene_frame(
+                        scene_index,
+                        now,
+                        scenes,
+                        images,
+                        timeline,
+                        art_elements,
+                        words_by_scene,
+                        style
+                    )
+
                     scene = scenes[scene_index]
-                    span = max(
-                        0.1,
-                        timing["speech_end"] - timing["start"]
-                    )
-                    progress = min(
-                        1.0,
-                        max(0.0, (now - timing["start"]) / span)
-                    )
-
-                    if images[scene_index] is not None:
-                        frame = make_fallback_background()
-                        render_motion(
-                            frame,
-                            images[scene_index],
-                            progress,
-                            scene
+                    if (
+                        transition_name(scene) == "crossfade"
+                        and now - transition_started < 0.35
+                    ):
+                        blend_progress = min(
+                            1.0,
+                            max(0.0, (now - transition_started) / 0.35)
                         )
-                    else:
-                        frame = make_fallback_background()
-                        apply_art_elements(frame, art_elements, now)
-
-                    draw_scene_heading(frame, scene, scene_index + 1)
-                    draw_caption(frame, words_by_scene[scene_index], now)
-
-                    transition = transition_name(scene)
-                    if transition == "crossfade" and now - transition_started < 0.35:
-                        blend_progress = min(1.0, max(0.0, (now - transition_started) / 0.35))
-                        frame = crossfade(transition_from, frame, blend_progress)
+                        frame = crossfade(
+                            transition_from,
+                            frame,
+                            blend_progress
+                        )
 
                 if frame.size != (WIDTH, HEIGHT):
                     frame = frame.resize(
@@ -513,11 +514,10 @@ def render(script_path, output_path, provider="edge", style=None):
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()
 
-        stderr = process.stderr.read().decode(
-            "utf-8",
-            errors="replace"
-        ) if process.stderr else ""
-
+        stderr = (
+            process.stderr.read().decode("utf-8", errors="replace")
+            if process.stderr else ""
+        )
         return_code = process.wait()
 
         if return_code != 0:
@@ -536,28 +536,20 @@ def render(script_path, output_path, provider="edge", style=None):
             f"- Frame rate: {FPS} FPS",
             "- Video: H.264",
             "- Audio: AAC narration",
+            f"- Visual style: {style}",
             f"- Duration: {actual_duration:.2f} seconds",
             "",
             "## Claims to verify before publication",
-            ""
-        ]
-
-        notes.extend(
-            f"- {claim}"
-            for claim in data.get("claims_to_verify", [])
-        )
-
-        notes.extend([
             "",
-            "## Historical and visual notes",
-            ""
-        ])
+        ]
+        notes.extend(
+            f"- {claim}" for claim in data.get("claims_to_verify", [])
+        )
+        notes.extend(["", "## Scene notes", ""])
 
         for index, scene in enumerate(scenes, 1):
             if scene.get("source_notes"):
-                notes.append(
-                    f"- Scene {index}: {scene['source_notes']}"
-                )
+                notes.append(f"- Scene {index}: {scene['source_notes']}")
 
         (output_path.parent / "render-notes.md").write_text(
             "\n".join(notes) + "\n",
@@ -589,8 +581,10 @@ def main():
         default="edge"
     )
     render_parser.add_argument(
-        "--style", choices=("editorial", "photographic"),
-        default=None, help="Visual style (default: script visual_style or editorial)."
+        "--style",
+        choices=("illustrated", "editorial", "photographic"),
+        default=None,
+        help="Visual style (default: illustrated)."
     )
 
     args = parser.parse_args()
