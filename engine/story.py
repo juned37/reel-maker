@@ -152,18 +152,24 @@ OTHER FIELDS:
 
 def extract_json(text):
     text = (text or "").strip()
+
     if text.startswith("```"):
         lines = text.splitlines()
+
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
+
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
+
         text = "\n".join(lines).strip()
 
     start = text.find("{")
     end = text.rfind("}")
+
     if start < 0 or end <= start:
         raise ValueError("Model response does not contain a JSON object.")
+
     return json.loads(text[start:end + 1])
 
 
@@ -172,11 +178,13 @@ def read_http_error(exc):
         detail = exc.read().decode("utf-8", "replace")
     except Exception:
         detail = str(exc)
+
     return detail[:1000]
 
 
 def call_groq(model, prompt, key):
     url = "https://api.groq.com/openai/v1/chat/completions"
+
     body = {
         "model": model,
         "messages": [
@@ -194,6 +202,7 @@ def call_groq(model, prompt, key):
         "max_tokens": 12000,
         "response_format": {"type": "json_object"},
     }
+
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -203,15 +212,20 @@ def call_groq(model, prompt, key):
         },
         method="POST",
     )
+
     with urllib.request.urlopen(request, timeout=180) as response:
         result = json.load(response)
 
     choices = result.get("choices", [])
+
     if not choices:
         raise RuntimeError("Groq returned no choices.")
+
     content = choices[0].get("message", {}).get("content")
+
     if not content:
         raise RuntimeError("Groq returned empty content.")
+
     return content.strip()
 
 
@@ -220,6 +234,7 @@ def call_gemini(model, prompt, key):
         "https://generativelanguage.googleapis.com/"
         f"v1beta/models/{model}:generateContent"
     )
+
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -228,6 +243,7 @@ def call_gemini(model, prompt, key):
             "maxOutputTokens": 12000,
         },
     }
+
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
@@ -237,26 +253,36 @@ def call_gemini(model, prompt, key):
         },
         method="POST",
     )
+
     with urllib.request.urlopen(request, timeout=180) as response:
         result = json.load(response)
 
     candidates = result.get("candidates", [])
+
     if not candidates:
         raise RuntimeError("Gemini returned no candidates.")
 
     candidate = candidates[0]
+
     if candidate.get("finishReason") == "MAX_TOKENS":
-        raise RuntimeError("Gemini response was cut off by the output token limit.")
+        raise RuntimeError(
+            "Gemini response was cut off by the output token limit."
+        )
 
     parts = candidate.get("content", {}).get("parts", [])
-    content = "".join(part.get("text", "") for part in parts).strip()
+    content = "".join(
+        part.get("text", "") for part in parts
+    ).strip()
+
     if not content:
         raise RuntimeError("Gemini returned empty content.")
+
     return content
 
 
 def provider_configuration():
     providers = []
+
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
 
@@ -291,19 +317,26 @@ def generate_with_provider(provider, prompt, minutes):
                 prompt,
                 provider["key"],
             )
+
             candidate = extract_json(response_text)
-            validate_script(candidate, target_minutes=minutes)
+
+            validate_script(
+                candidate,
+                target_minutes=minutes,
+            )
 
             # New topic-generated scripts must have a visual plan per scene.
             missing = [
                 i for i, scene in enumerate(candidate["scenes"], 1)
                 if not isinstance(scene.get("visual_plan"), dict)
             ]
+
             if missing:
                 raise ValueError(
                     "Missing visual_plan in scene(s): "
                     + ", ".join(map(str, missing))
                 )
+
             return candidate
 
         except urllib.error.HTTPError as exc:
@@ -311,13 +344,19 @@ def generate_with_provider(provider, prompt, minutes):
                 f"{provider['name']} ({provider['model']}): "
                 f"HTTP {exc.code}: {read_http_error(exc)}"
             )
+
             if exc.code not in (408, 429, 500, 502, 503, 504):
                 break
+
             if attempt == 0:
                 try:
-                    delay = min(max(float(exc.headers.get("Retry-After", 5)), 1), 30)
+                    delay = min(
+                        max(float(exc.headers.get("Retry-After", 5)), 1),
+                        30,
+                    )
                 except (TypeError, ValueError):
                     delay = 5
+
                 time.sleep(delay)
 
         except (
@@ -326,7 +365,10 @@ def generate_with_provider(provider, prompt, minutes):
             ValueError,
             RuntimeError,
         ) as exc:
-            errors.append(f"{provider['name']} ({provider['model']}): {exc}")
+            errors.append(
+                f"{provider['name']} ({provider['model']}): {exc}"
+            )
+
             if attempt == 0:
                 time.sleep(3)
 
@@ -335,14 +377,19 @@ def generate_with_provider(provider, prompt, minutes):
 
 def generate_documentary(topic, output, minutes=3):
     topic = str(topic).strip()
+
     if not topic:
         raise ValueError("Please provide a documentary topic.")
 
     minutes = float(minutes)
+
     if not 2 <= minutes <= 5:
-        raise ValueError("Documentary duration must be between 2 and 5 minutes.")
+        raise ValueError(
+            "Documentary duration must be between 2 and 5 minutes."
+        )
 
     providers = provider_configuration()
+
     if not providers:
         raise RuntimeError(
             "No AI provider key found. Add GROQ_API_KEY or GEMINI_API_KEY "
@@ -350,12 +397,24 @@ def generate_documentary(topic, output, minutes=3):
         )
 
     target_words = round(minutes * 135)
-    prompt = PROMPT.format(
-        topic=topic,
-        minutes=minutes,
-        words=target_words,
-        minimum_words=round(target_words * 0.80),
-        maximum_words=round(target_words * 1.20),
+
+    # IMPORTANT:
+    # Do not use PROMPT.format() here because PROMPT contains literal
+    # JSON braces in its visual_plan example.
+    # Replace only the intended placeholders.
+    prompt = (
+        PROMPT
+        .replace("{topic}", topic)
+        .replace("{minutes}", str(minutes))
+        .replace("{words}", str(target_words))
+        .replace(
+            "{minimum_words}",
+            str(round(target_words * 0.80)),
+        )
+        .replace(
+            "{maximum_words}",
+            str(round(target_words * 1.20)),
+        )
     )
 
     errors = []
@@ -363,33 +422,59 @@ def generate_documentary(topic, output, minutes=3):
 
     for provider in providers:
         try:
-            data = generate_with_provider(provider, prompt, minutes)
+            data = generate_with_provider(
+                provider,
+                prompt,
+                minutes,
+            )
+
             print(
                 f"Documentary generated using "
                 f"{provider['name']} ({provider['model']})."
             )
+
             break
+
         except RuntimeError as exc:
             errors.append(str(exc))
-            print(f"{provider['name']} failed. Trying next provider.")
+            print(
+                f"{provider['name']} failed. Trying next provider."
+            )
 
     if data is None:
         raise RuntimeError(
-            "All configured AI providers failed:\n" + "\n".join(errors)
+            "All configured AI providers failed:\n"
+            + "\n".join(errors)
         )
 
-    data.setdefault("voice", os.getenv("VOICE", "en-US-GuyNeural"))
+    data.setdefault(
+        "voice",
+        os.getenv("VOICE", "en-US-GuyNeural"),
+    )
+
     data.setdefault("rate", "-3%")
     data.setdefault("watermark", os.getenv("WATERMARK", ""))
     data.setdefault("claims_to_verify", [])
+
     data["visual_style"] = "illustrated"
 
-    validate_script(data, target_minutes=minutes)
+    validate_script(
+        data,
+        target_minutes=minutes,
+    )
 
     path = Path(output)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -398,4 +483,5 @@ def generate_documentary(topic, output, minutes=3):
         f"Words: {data['word_count']}\n"
         f"Estimated narration: {data['estimated_minutes']} minutes"
     )
+
     return data
