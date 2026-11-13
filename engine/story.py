@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -11,147 +12,134 @@ from pathlib import Path
 from .quality import validate_script
 
 
-PROMPT = r"""
-Create a compelling, accurate documentary for vertical video.
+PROMPT = """
+Create an accurate, engaging documentary for vertical video.
 
 TOPIC: {topic}
-TARGET DURATION: {minutes} minutes.
-TARGET WORDS: approximately {words}.
-ACCEPTABLE WORD RANGE: {minimum_words} to {maximum_words}.
+DURATION: {minutes} minutes.
+TARGET NARRATION: {words} words.
+ACCEPTABLE WORD RANGE: {minimum_words}-{maximum_words} words.
 
-Return ONLY valid JSON. Do not use Markdown fences.
+Return one valid JSON object only. No Markdown fences or explanations.
 
-Required top-level fields:
-title, watermark, voice, rate, claims_to_verify, visual_style, scenes.
-
-Set visual_style to "illustrated".
-
-Create 10 to 24 scenes. Each scene must contain:
-onscreen_title, narration, clear, show, visual_query, camera,
-transition, source_notes, visual_plan.
-
-STORY:
-- Open with a strong hook.
-- Build a logical narrative with clear progression.
-- Each scene must add new information.
-- End with a meaningful conclusion.
-- Write natural narration suitable for spoken delivery.
-- Avoid repetition and unsupported claims.
-- Match the requested word count.
-
-VISUAL STORYTELLING — CRITICAL:
-The video uses hand-drawn animated illustrations, NOT web photographs.
-Every scene must visually explain the specific narration being spoken.
-Do not reuse one generic drawing across unrelated scenes.
-Think like a documentary storyboard artist.
-Identify the key objects, places, people (where appropriate), actions,
-relationships, and processes in the narration.
-Translate those ideas into a clear illustration that can be drawn with
-simple shapes and lines.
-The visual plan must be specific to this scene and topic.
-
-Each visual_plan must be an object with:
+JSON structure:
 {
-  "elements": [
+  "title": ["Documentary title"],
+  "watermark": "",
+  "voice": "en-US-GuyNeural",
+  "rate": "-3%",
+  "claims_to_verify": [],
+  "visual_style": "illustrated",
+  "scenes": [
     {
-      "type": "line | path | polyline | polygon | circle | ellipse | rect | text | arc",
-      "x": 50,
-      "y": 50,
-      "size": 20,
-      "points": [[10,20],[30,40]],
-      "color": "ink | gold | paper | pale | muted | blue | green | red | white | dark",
-      "fill": "pale",
-      "width": 5,
-      "text": "optional short label",
-      "font_size": 32,
-      "bold": true,
-      "draw_at": 0.0,
-      "draw_duration": 0.25,
-      "move_x": 0,
-      "move_y": 0,
-      "pulse": 0
+      "onscreen_title": "Scene heading",
+      "narration": "Spoken narration",
+      "clear": true,
+      "show": [],
+      "visual_query": "",
+      "camera": "slow_push",
+      "transition": "crossfade",
+      "source_notes": "",
+      "visual_plan": {
+        "elements": [
+          {
+            "type": "line",
+            "points": [[15, 35], [50, 55]],
+            "color": "ink",
+            "width": 5,
+            "draw_at": 0.0,
+            "draw_duration": 0.3
+          }
+        ]
+      }
     }
   ]
 }
 
-COORDINATES:
-- Use a 0 to 100 coordinate system.
-- x=0 is left, x=100 is right.
-- y=0 is top, y=100 is bottom.
-- For circle, ellipse and rect, x and y are the centre.
-- size is the approximate diameter/width in percentage units.
-- For paths and polygons, use points as [x,y] pairs.
-- Use 5 to 20 elements per scene where useful.
-- Use short labels only when they help explain the drawing.
-- Use draw_at to sequence elements during the narration (0 to 1).
-- Use draw_duration to control how quickly an element is revealed.
-- Use move_x and move_y for subtle motion over the scene.
-- Use pulse sparingly.
-- Keep important drawing content around y=28 to y=68, leaving room
-  for the heading and subtitles.
-- Make drawings large, balanced and easy to understand on a phone.
-- Use only the supported element types and palette names above.
-- Do not output code, SVG, HTML or arbitrary drawing instructions.
+NARRATION:
+- Write approximately {words} spoken words in total.
+- Stay inside the acceptable word range.
+- Divide narration across 8 to 12 scenes.
+- Give every scene meaningful narration.
+- Do not use one-sentence scenes merely to increase scene count.
+- Open with a strong hook and end with a meaningful conclusion.
+- Use natural spoken language.
+- Avoid repetition and unsupported claims.
 
-VISUAL DESIGN:
-- Warm parchment background.
-- Hand-drawn dark outlines.
-- Restrained gold accents.
-- Muted natural colours.
-- Elegant, simple documentary illustration.
-- Prefer a few clear, recognisable objects over abstract decoration.
-- Use a coherent illustration style across all scenes.
-- The visual should change as the narration develops.
-- Show cause and effect, movement, comparisons, routes, structures,
-  processes and relationships when the narration describes them.
-- Avoid generic decorative circles, random lines or repeated icons.
+VISUALS:
+- The video uses hand-drawn illustrations, NOT web photographs.
+- Every scene must have its own topic-specific visual_plan.
+- Use 5 to 10 useful drawing elements per scene.
+- Use only these types: line, path, polyline, polygon, arrow,
+  circle, ellipse, rect, text, arc.
+- Use only these colours: ink, gold, paper, pale, muted, blue,
+  green, red, white, dark.
+- Use coordinates from 0 to 100.
+- For line, path, polyline, polygon and arrow, provide points as
+  [x,y] pairs. Arrow requires at least two points.
+- For circle, ellipse, rect and arc, use x, y and size.
+- For text, use x, y and a short text value.
+- Use draw_at and draw_duration between 0 and 1.
+- Keep important content around y=28 to y=68.
+- Prefer recognisable objects, structures, maps, tools and processes.
+- Show relationships and actions described by the narration.
+- Do not fill scenes with random decorative shapes.
+- Keep a consistent warm parchment, dark outline and restrained
+  gold-accent illustration style.
 
 TOPIC ADAPTATION:
-For science, illustrate the relevant scientific objects and processes.
-For history, illustrate period-appropriate maps, artefacts, buildings,
-tools, trade, landscapes and documented cultural details.
-For biographies, illustrate places, objects, timelines and events.
-For technology, illustrate devices, systems, components and processes.
-For geography, illustrate maps, terrain, rivers, routes and locations.
-For other topics, choose visual metaphors and objects that accurately
-explain the subject.
-Do not force every topic into a map, building or human figure.
+Choose visuals that genuinely explain the topic.
+History: period-appropriate places, maps, artefacts and buildings.
+Science: scientific objects, systems and processes.
+Religion: relevant architecture, objects, maps and practices.
+Technology: devices, systems and components.
+Geography: terrain, routes, rivers and locations.
+Other topics: select accurate and meaningful visual metaphors.
 
-PEOPLE AND SENSITIVE HISTORICAL TOPICS:
+ISLAMIC CONTENT AND HISTORICAL SAFEGUARDS:
 - Never depict Prophet Muhammad ﷺ in any form, including silhouette,
-  shadow, imagined appearance or symbolic human representation.
-- Do not create fabricated portraits of historical people.
-- Do not present imagined reconstructions as authentic evidence.
-- Avoid anachronistic clothing, objects, buildings and technology.
+  shadow or symbolic human representation.
+- Do not invent portraits or appearances of historical people.
+- Do not present imagined reconstructions as historical evidence.
+- Avoid anachronistic clothing, objects and buildings.
 - Distinguish established evidence, tradition and disputed reports.
-- Do not invent quotations, dates, events or certainty.
+- Do not invent quotations, dates or religious rulings.
 - Put important uncertain claims in claims_to_verify.
 
-VISUAL QUERY:
-Keep visual_query as a short optional reference-search phrase for
-backward compatibility. It is NOT used as the primary scene visual.
-Do not let a web image determine the illustration.
-
-CAMERA:
-Use only slow_push, pan_left, pan_right, pan_up, pan_down.
-
-TRANSITION:
-Use only crossfade or cut.
-
-OTHER FIELDS:
+FIELDS:
 - clear must be true.
-- show must be an empty list unless a legacy art element is genuinely useful.
-- source_notes should explain evidence and visual caveats.
-- Use voice "en-US-GuyNeural" unless specified otherwise.
-- Use rate "-3%".
-- Include claims_to_verify as a list.
-- Each scene's visual_plan must contain 5 to 20 elements.
-- Return valid JSON only.
+- show must be an empty list.
+- visual_query is only for backward compatibility.
+- camera must be slow_push, pan_left, pan_right, pan_up or pan_down.
+- transition must be crossfade or cut.
+- source_notes should identify evidence limitations when relevant.
+
+Return valid JSON only. Ensure all braces, quotes and commas are
+valid JSON syntax. Do not add comments or trailing commas.
 """
 
 
-def extract_json(text):
-    text = (text or "").strip()
+def build_prompt(topic, minutes):
+    target_words = round(minutes * 135)
+
+    return (
+        PROMPT
+        .replace("{topic}", topic)
+        .replace("{minutes}", str(minutes))
+        .replace("{words}", str(target_words))
+        .replace(
+            "{minimum_words}",
+            str(round(target_words * 0.80)),
+        )
+        .replace(
+            "{maximum_words}",
+            str(round(target_words * 1.20)),
+        )
+    )
+
+
+def extract_json(response_text):
+    text = (response_text or "").strip()
 
     if text.startswith("```"):
         lines = text.splitlines()
@@ -164,11 +152,20 @@ def extract_json(text):
 
         text = "\n".join(lines).strip()
 
+    # First try parsing the complete response.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Then try extracting the outer JSON object.
     start = text.find("{")
     end = text.rfind("}")
 
     if start < 0 or end <= start:
-        raise ValueError("Model response does not contain a JSON object.")
+        raise ValueError(
+            "AI response does not contain a complete JSON object."
+        )
 
     return json.loads(text[start:end + 1])
 
@@ -179,7 +176,34 @@ def read_http_error(exc):
     except Exception:
         detail = str(exc)
 
-    return detail[:1000]
+    return detail[:1500]
+
+
+def retry_delay(exc, default=12):
+    """Read Retry-After or the wait time from a provider error."""
+    headers = getattr(exc, "headers", None)
+
+    if headers:
+        value = headers.get("Retry-After")
+
+        if value:
+            try:
+                return min(max(float(value), 2), 90)
+            except (TypeError, ValueError):
+                pass
+
+    detail = read_http_error(exc)
+
+    match = re.search(
+        r"try again in ([0-9.]+)s",
+        detail,
+        re.IGNORECASE,
+    )
+
+    if match:
+        return min(max(float(match.group(1)) + 2, 2), 90)
+
+    return default
 
 
 def call_groq(model, prompt, key):
@@ -191,16 +215,20 @@ def call_groq(model, prompt, key):
             {
                 "role": "system",
                 "content": (
-                    "You are a documentary writer and storyboard artist. "
-                    "Create accurate topic-specific visual plans. "
-                    "Return valid JSON only."
+                    "You are an accurate documentary writer and "
+                    "visual storyboard artist. Return valid JSON only."
                 ),
             },
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ],
-        "temperature": 0.45,
-        "max_tokens": 12000,
-        "response_format": {"type": "json_object"},
+        "temperature": 0.3,
+        "max_tokens": 6500,
+        "response_format": {
+            "type": "json_object",
+        },
     }
 
     request = urllib.request.Request(
@@ -222,7 +250,15 @@ def call_groq(model, prompt, key):
     if not choices:
         raise RuntimeError("Groq returned no choices.")
 
-    content = choices[0].get("message", {}).get("content")
+    choice = choices[0]
+
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError(
+            "Groq output was truncated. Increase the output token limit "
+            "or simplify the requested visual plans."
+        )
+
+    content = choice.get("message", {}).get("content")
 
     if not content:
         raise RuntimeError("Groq returned empty content.")
@@ -237,11 +273,19 @@ def call_gemini(model, prompt, key):
     )
 
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.45,
-            "maxOutputTokens": 12000,
+            "temperature": 0.3,
+            "maxOutputTokens": 10000,
         },
     }
 
@@ -266,15 +310,18 @@ def call_gemini(model, prompt, key):
 
     candidate = candidates[0]
 
-    if candidate.get("finishReason") == "MAX_TOKENS":
+    finish_reason = candidate.get("finishReason", "")
+
+    if finish_reason == "MAX_TOKENS":
         raise RuntimeError(
-            "Gemini response was cut off by the output token limit."
+            "Gemini output was truncated by the token limit."
         )
 
     parts = candidate.get("content", {}).get("parts", [])
 
     content = "".join(
-        part.get("text", "") for part in parts
+        part.get("text", "")
+        for part in parts
     ).strip()
 
     if not content:
@@ -286,80 +333,109 @@ def call_gemini(model, prompt, key):
 def provider_configuration():
     providers = []
 
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
 
-    if groq_key:
-        providers.append({
-            "name": "Groq",
-            "model": os.getenv("GROQ_MODEL", "").strip()
-            or "openai/gpt-oss-120b",
-            "key": groq_key,
-            "call": call_groq,
-        })
-
+    # Gemini is the primary provider.
     if gemini_key:
         providers.append({
             "name": "Gemini",
-            "model": os.getenv("GEMINI_MODEL", "").strip()
-            or "gemini-3.5-flash-lite",
+            "model": (
+                os.getenv("GEMINI_MODEL", "").strip()
+                or "gemini-3.5-flash-lite"
+            ),
             "key": gemini_key,
             "call": call_gemini,
+        })
+
+    # Groq is the fallback provider.
+    if groq_key:
+        providers.append({
+            "name": "Groq",
+            "model": (
+                os.getenv("GROQ_MODEL", "").strip()
+                or "openai/gpt-oss-120b"
+            ),
+            "key": groq_key,
+            "call": call_groq,
         })
 
     return providers
 
 
+def validate_generated_script(candidate, minutes):
+    validate_script(
+        candidate,
+        target_minutes=minutes,
+    )
+
+    missing = []
+
+    for index, scene in enumerate(candidate["scenes"], 1):
+        if not isinstance(scene.get("visual_plan"), dict):
+            missing.append(index)
+
+    if missing:
+        raise ValueError(
+            "Missing visual_plan in scene(s): "
+            + ", ".join(map(str, missing))
+        )
+
+    return candidate
+
+
 def generate_with_provider(provider, prompt, minutes):
     errors = []
 
-    for attempt in range(2):
+    attempt_prompt = prompt
+
+    for attempt in range(3):
         try:
+            print(
+                f"Generating with {provider['name']} "
+                f"({provider['model']}), attempt {attempt + 1}/3..."
+            )
+
             response_text = provider["call"](
                 provider["model"],
-                prompt,
+                attempt_prompt,
                 provider["key"],
             )
 
             candidate = extract_json(response_text)
 
-            validate_script(
+            validate_generated_script(
                 candidate,
-                target_minutes=minutes,
+                minutes,
             )
-
-            missing = [
-                i for i, scene in enumerate(candidate["scenes"], 1)
-                if not isinstance(scene.get("visual_plan"), dict)
-            ]
-
-            if missing:
-                raise ValueError(
-                    "Missing visual_plan in scene(s): "
-                    + ", ".join(map(str, missing))
-                )
 
             return candidate
 
         except urllib.error.HTTPError as exc:
+            detail = read_http_error(exc)
+
             errors.append(
-                f"{provider['name']} ({provider['model']}): "
-                f"HTTP {exc.code}: {read_http_error(exc)}"
+                f"HTTP {exc.code}: {detail}"
             )
 
-            if exc.code not in (408, 429, 500, 502, 503, 504):
-                break
+            # Retry rate limits using the provider's suggested wait.
+            if exc.code == 429 and attempt < 2:
+                delay = retry_delay(exc)
 
-            if attempt == 0:
-                try:
-                    delay = min(
-                        max(float(exc.headers.get("Retry-After", 5)), 1),
-                        30,
-                    )
-                except (TypeError, ValueError):
-                    delay = 5
+                print(
+                    f"{provider['name']} rate limited. "
+                    f"Waiting {delay:.1f} seconds."
+                )
 
                 time.sleep(delay)
+                continue
+
+            # Temporary server errors.
+            if exc.code in (408, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+
+            break
 
         except (
             urllib.error.URLError,
@@ -367,21 +443,38 @@ def generate_with_provider(provider, prompt, minutes):
             ValueError,
             RuntimeError,
         ) as exc:
-            errors.append(
-                f"{provider['name']} ({provider['model']}): {exc}"
-            )
+            errors.append(str(exc))
 
-            if attempt == 0:
-                time.sleep(3)
+            if attempt < 2:
+                # Give the provider a more explicit correction instruction.
+                attempt_prompt = (
+                    prompt
+                    + "\n\nIMPORTANT CORRECTION:\n"
+                    "Your previous response did not pass validation. "
+                    "Return a complete valid JSON object. "
+                    "Do not shorten the narration. "
+                    "Meet the requested total word count exactly within "
+                    "the specified acceptable range. "
+                    "Every scene must contain a valid visual_plan. "
+                    "Use only supported visual element types. "
+                    "Do not add Markdown or explanations."
+                )
 
-    raise RuntimeError("\n".join(errors))
+                time.sleep(2)
+
+    raise RuntimeError(
+        f"{provider['name']} ({provider['model']}) failed:\n"
+        + "\n".join(errors)
+    )
 
 
 def generate_documentary(topic, output, minutes=3):
     topic = str(topic).strip()
 
     if not topic:
-        raise ValueError("Please provide a documentary topic.")
+        raise ValueError(
+            "Please provide a documentary topic."
+        )
 
     minutes = float(minutes)
 
@@ -394,28 +487,11 @@ def generate_documentary(topic, output, minutes=3):
 
     if not providers:
         raise RuntimeError(
-            "No AI provider key found. Add GROQ_API_KEY or GEMINI_API_KEY "
-            "to your environment or GitHub Actions secrets."
+            "No AI provider key found. Add GEMINI_API_KEY or "
+            "GROQ_API_KEY to GitHub Actions secrets."
         )
 
-    target_words = round(minutes * 135)
-
-    # Replace only intended placeholders.
-    # This preserves the literal JSON braces in PROMPT.
-    prompt = (
-        PROMPT
-        .replace("{topic}", topic)
-        .replace("{minutes}", str(minutes))
-        .replace("{words}", str(target_words))
-        .replace(
-            "{minimum_words}",
-            str(round(target_words * 0.80)),
-        )
-        .replace(
-            "{maximum_words}",
-            str(round(target_words * 1.20)),
-        )
-    )
+    prompt = build_prompt(topic, minutes)
 
     errors = []
     data = None
@@ -437,6 +513,7 @@ def generate_documentary(topic, output, minutes=3):
 
         except RuntimeError as exc:
             errors.append(str(exc))
+
             print(
                 f"{provider['name']} failed. Trying next provider."
             )
@@ -452,15 +529,26 @@ def generate_documentary(topic, output, minutes=3):
         os.getenv("VOICE", "en-US-GuyNeural"),
     )
 
-    data.setdefault("rate", "-3%")
-    data.setdefault("watermark", os.getenv("WATERMARK", ""))
-    data.setdefault("claims_to_verify", [])
+    data.setdefault(
+        "rate",
+        "-3%",
+    )
+
+    data.setdefault(
+        "watermark",
+        os.getenv("WATERMARK", ""),
+    )
+
+    data.setdefault(
+        "claims_to_verify",
+        [],
+    )
 
     data["visual_style"] = "illustrated"
 
-    validate_script(
+    validate_generated_script(
         data,
-        target_minutes=minutes,
+        minutes,
     )
 
     path = Path(output)
