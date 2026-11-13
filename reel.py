@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """Vertical documentary video generator for Reels and YouTube Shorts."""
 
@@ -165,42 +164,64 @@ def build_audio(scenes, voice, rate, provider, work):
 
 def load_scene_images(scenes):
     images = []
+
     for scene in scenes:
         image_path = scene.get("image")
+
         if not image_path:
             images.append(None)
             continue
+
         try:
             with Image.open(image_path) as source:
                 images.append(source.convert("RGB").copy())
         except (OSError, TypeError, ValueError):
             print(f"WARNING: Could not open scene image: {image_path}")
             images.append(None)
+
     return images
 
 
 def build_legacy_art_elements(scenes, timeline):
-    """Retain support for old scripts using art.py show elements."""
-    elements = []
+    """
+    Build illustrations separately for each scene.
 
-    for scene, timing in zip(scenes, timeline):
+    Returning a list per scene prevents illustrations from one scene
+    appearing in later scenes. Text illustrations are supported too.
+    """
+    if len(scenes) != len(timeline):
+        raise ValueError(
+            "The number of scenes and timeline entries must match."
+        )
+
+    scene_elements = []
+
+    for scene_index, (scene, timing) in enumerate(zip(scenes, timeline), 1):
+        elements = []
+
         for spec in scene.get("show", []):
-            if str(spec).strip().startswith("text:"):
-                continue
             try:
+                name, _, _ = parse_spec(spec)
                 image, (x, y) = make_element(spec)
+
                 elements.append({
                     "image": image.convert("RGBA"),
                     "x": int(x),
                     "y": int(y),
                     "show": timing["start"] + 0.15,
                     "hide": timing["end"],
-                    "floating": parse_spec(spec)[0] not in FIXED
+                    "floating": name not in FIXED
                 })
-            except Exception as exc:
-                print(f"WARNING: Could not create legacy art {spec!r}: {exc}")
 
-    return elements
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ValueError(
+                    f"Scene {scene_index}: could not build "
+                    f"illustration {spec!r}: {exc}"
+                ) from exc
+
+        scene_elements.append(elements)
+
+    return scene_elements
 
 
 def make_fallback_background():
@@ -212,6 +233,7 @@ def make_fallback_background():
 
 def draw_scene_heading(frame, scene, scene_number):
     label = scene.get("onscreen_title") or scene.get("label")
+
     if not label:
         return
 
@@ -236,14 +258,22 @@ def draw_scene_heading(frame, scene, scene_number):
         fill=INK,
         anchor="mm"
     )
-    draw.line((WIDTH // 2 - 110, 340, WIDTH // 2 - 10, 340), fill=GOLD, width=3)
+    draw.line(
+        (WIDTH // 2 - 110, 340, WIDTH // 2 - 10, 340),
+        fill=GOLD,
+        width=3
+    )
     draw.polygon([
         (WIDTH // 2, 332),
         (WIDTH // 2 + 8, 340),
         (WIDTH // 2, 348),
         (WIDTH // 2 - 8, 340)
     ], fill=GOLD)
-    draw.line((WIDTH // 2 + 10, 340, WIDTH // 2 + 110, 340), fill=GOLD, width=3)
+    draw.line(
+        (WIDTH // 2 + 10, 340, WIDTH // 2 + 110, 340),
+        fill=GOLD,
+        width=3
+    )
 
 
 def group_caption_phrases(word_entries):
@@ -255,6 +285,7 @@ def group_caption_phrases(word_entries):
         word = item[0].rstrip("\"'”’)]}")
 
         sentence_end = word.endswith((".", "?", "!", ";", ":"))
+
         if sentence_end or len(current) >= CAPTION_MAX_WORDS:
             phrases.append(current)
             current = []
@@ -273,6 +304,7 @@ def draw_caption(frame, word_entries, current_time):
     for phrase in phrases:
         start = phrase[0][1]
         end = phrase[-1][2]
+
         if start <= current_time < end:
             active = phrase
             break
@@ -289,7 +321,11 @@ def draw_caption(frame, word_entries, current_time):
 
     for word in words:
         candidate = f"{current_line} {word}".strip()
-        if current_line and draw.textlength(candidate, font=caption_font) > CAPTION_WIDTH:
+
+        if (
+            current_line
+            and draw.textlength(candidate, font=caption_font) > CAPTION_WIDTH
+        ):
             lines.append(current_line)
             current_line = word
         else:
@@ -320,6 +356,7 @@ def apply_legacy_art(frame, elements, current_time):
 
         image = item["image"]
         alpha = min(1.0, (current_time - item["show"]) / 0.5)
+
         if alpha <= 0:
             continue
 
@@ -331,8 +368,16 @@ def apply_legacy_art(frame, elements, current_time):
             )
             image.putalpha(channel)
 
-        dy = int(math.sin(current_time * 1.4) * 4) if item["floating"] else 0
-        frame.paste(image, (item["x"], item["y"] + dy), image)
+        dy = (
+            int(math.sin(current_time * 1.4) * 4)
+            if item["floating"] else 0
+        )
+
+        frame.paste(
+            image,
+            (item["x"], item["y"] + dy),
+            image
+        )
 
 
 def create_title_card(data):
@@ -354,23 +399,34 @@ def render_scene_frame(
 ):
     scene = scenes[scene_index]
     timing = timeline[scene_index]
+
     span = max(0.1, timing["speech_end"] - timing["start"])
-    progress = min(1.0, max(0.0, (now - timing["start"]) / span))
+    progress = min(
+        1.0,
+        max(0.0, (now - timing["start"]) / span)
+    )
 
     frame = make_fallback_background()
 
     if style == "photographic" and images[scene_index] is not None:
         render_motion(frame, images[scene_index], progress, scene)
+
     else:
         plan = scene.get("visual_plan")
+
         if plan:
             frame = render_visual_plan(frame, plan, progress)
         else:
-            # Backward compatibility for older JSON scripts.
-            apply_legacy_art(frame, art_elements, now)
+            # Only the current scene's illustrations are rendered.
+            apply_legacy_art(
+                frame,
+                art_elements[scene_index],
+                now
+            )
 
     draw_scene_heading(frame, scene, scene_index + 1)
     draw_caption(frame, words_by_scene[scene_index], now)
+
     return frame
 
 
@@ -405,7 +461,12 @@ def render(script_path, output_path, provider="edge", style=None):
         )
 
         # Illustrated mode deliberately ignores downloaded web photographs.
-        images = load_scene_images(scenes) if style == "photographic" else [None] * len(scenes)
+        images = (
+            load_scene_images(scenes)
+            if style == "photographic"
+            else [None] * len(scenes)
+        )
+
         art_elements = build_legacy_art_elements(scenes, timeline)
         title_card = create_title_card(data)
         words_by_scene = [item["words"] for item in timeline]
@@ -462,11 +523,15 @@ def render(script_path, output_path, provider="edge", style=None):
                         if previous_frame is not None
                         else title_card.copy()
                     )
-                    transition_started = LEAD_SECONDS if scene_index == 0 else now
+
+                    transition_started = (
+                        LEAD_SECONDS if scene_index == 0 else now
+                    )
                     last_scene_index = scene_index
 
                 if now < LEAD_SECONDS:
                     frame = title_card.copy()
+
                 else:
                     frame = render_scene_frame(
                         scene_index,
@@ -480,14 +545,19 @@ def render(script_path, output_path, provider="edge", style=None):
                     )
 
                     scene = scenes[scene_index]
+
                     if (
                         transition_name(scene) == "crossfade"
                         and now - transition_started < 0.35
                     ):
                         blend_progress = min(
                             1.0,
-                            max(0.0, (now - transition_started) / 0.35)
+                            max(
+                                0.0,
+                                (now - transition_started) / 0.35
+                            )
                         )
+
                         frame = crossfade(
                             transition_from,
                             frame,
@@ -504,12 +574,15 @@ def render(script_path, output_path, provider="edge", style=None):
                 previous_frame = frame
 
                 if frame_number and frame_number % (FPS * 15) == 0:
-                    print(f"Rendered {frame_number}/{total_frames} frames")
+                    print(
+                        f"Rendered {frame_number}/{total_frames} frames"
+                    )
 
         except (BrokenPipeError, OSError) as exc:
             raise RuntimeError(
                 "FFmpeg stopped while receiving video frames."
             ) from exc
+
         finally:
             if process.stdin and not process.stdin.closed:
                 process.stdin.close()
@@ -524,7 +597,9 @@ def render(script_path, output_path, provider="edge", style=None):
             raise RuntimeError(f"FFmpeg rendering failed:\n{stderr}")
 
         if not output_path.is_file() or output_path.stat().st_size == 0:
-            raise RuntimeError("FFmpeg did not create a valid output file.")
+            raise RuntimeError(
+                "FFmpeg did not create a valid output file."
+            )
 
         actual_duration = probe_duration(output_path)
 
@@ -542,14 +617,18 @@ def render(script_path, output_path, provider="edge", style=None):
             "## Claims to verify before publication",
             "",
         ]
+
         notes.extend(
-            f"- {claim}" for claim in data.get("claims_to_verify", [])
+            f"- {claim}"
+            for claim in data.get("claims_to_verify", [])
         )
         notes.extend(["", "## Scene notes", ""])
 
         for index, scene in enumerate(scenes, 1):
             if scene.get("source_notes"):
-                notes.append(f"- Scene {index}: {scene['source_notes']}")
+                notes.append(
+                    f"- Scene {index}: {scene['source_notes']}"
+                )
 
         (output_path.parent / "render-notes.md").write_text(
             "\n".join(notes) + "\n",
@@ -565,12 +644,19 @@ def render(script_path, output_path, provider="edge", style=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(
+        dest="command",
+        required=True
+    )
 
     generate_parser = commands.add_parser("generate")
     generate_parser.add_argument("topic")
     generate_parser.add_argument("output")
-    generate_parser.add_argument("--minutes", type=float, default=3.0)
+    generate_parser.add_argument(
+        "--minutes",
+        type=float,
+        default=3.0
+    )
 
     render_parser = commands.add_parser("render")
     render_parser.add_argument("script")
