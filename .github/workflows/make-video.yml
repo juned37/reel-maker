@@ -1,4 +1,3 @@
-
 name: Make vertical documentary video
 
 on:
@@ -44,11 +43,12 @@ on:
         type: string
 
       visual_style:
-        description: "Illustrated documentary style"
+        description: "Visual rendering style"
         required: false
-        default: "illustrated"
+        default: "cinematic"
         type: choice
         options:
+          - "cinematic"
           - "illustrated"
           - "editorial"
           - "photographic"
@@ -59,7 +59,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -112,10 +112,19 @@ jobs:
 
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          GEMINI_IMAGE_MODEL: ${{ vars.GEMINI_IMAGE_MODEL }}
 
         run: |
           set -euo pipefail
           mkdir -p out
+
+          echo "Selected visual style: $VISUAL_STYLE"
+
+          if [[ "$VISUAL_STYLE" == "cinematic" && -z "${GEMINI_API_KEY:-}" ]]; then
+            echo "Cinematic mode requires GEMINI_API_KEY for scene artwork."
+            echo "Add GEMINI_API_KEY under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
           if [[ -n "${TOPIC// /}" ]]; then
             if [[ -z "${GROQ_API_KEY:-}" && -z "${GEMINI_API_KEY:-}" ]]; then
