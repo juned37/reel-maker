@@ -209,6 +209,7 @@ def call_groq(model, prompt, key):
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
+            "User-Agent": "reel-maker/1.0",
         },
         method="POST",
     )
@@ -250,6 +251,7 @@ def call_gemini(model, prompt, key):
         headers={
             "Content-Type": "application/json",
             "x-goog-api-key": key,
+            "User-Agent": "reel-maker/1.0",
         },
         method="POST",
     )
@@ -270,6 +272,7 @@ def call_gemini(model, prompt, key):
         )
 
     parts = candidate.get("content", {}).get("parts", [])
+
     content = "".join(
         part.get("text", "") for part in parts
     ).strip()
@@ -299,7 +302,7 @@ def provider_configuration():
         providers.append({
             "name": "Gemini",
             "model": os.getenv("GEMINI_MODEL", "").strip()
-            or "gemini-2.5-flash",
+            or "gemini-3.5-flash-lite",
             "key": gemini_key,
             "call": call_gemini,
         })
@@ -325,7 +328,6 @@ def generate_with_provider(provider, prompt, minutes):
                 target_minutes=minutes,
             )
 
-            # New topic-generated scripts must have a visual plan per scene.
             missing = [
                 i for i, scene in enumerate(candidate["scenes"], 1)
                 if not isinstance(scene.get("visual_plan"), dict)
@@ -398,10 +400,8 @@ def generate_documentary(topic, output, minutes=3):
 
     target_words = round(minutes * 135)
 
-    # IMPORTANT:
-    # Do not use PROMPT.format() here because PROMPT contains literal
-    # JSON braces in its visual_plan example.
-    # Replace only the intended placeholders.
+    # Replace only intended placeholders.
+    # This preserves the literal JSON braces in PROMPT.
     prompt = (
         PROMPT
         .replace("{topic}", topic)
@@ -464,6 +464,7 @@ def generate_documentary(topic, output, minutes=3):
     )
 
     path = Path(output)
+
     path.parent.mkdir(
         parents=True,
         exist_ok=True,
