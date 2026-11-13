@@ -1,5 +1,4 @@
-
-"""Tests for documentary scripts, illustration plans and transitions."""
+"""Tests for documentary scripts, illustrations and transitions."""
 
 import json
 from pathlib import Path
@@ -7,13 +6,18 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from art import ELEMENTS, make_element, parse_spec
 from engine.quality import validate_script, count_words
-from engine.illustrations import render_visual_plan, validate_visual_plan
+from engine.illustrations import (
+    render_visual_plan,
+    validate_visual_plan,
+)
 from engine.transitions import (
     crossfade,
     transition_name,
     apply_transition,
 )
+from reel import build_legacy_art_elements
 
 
 def valid_visual_plan():
@@ -82,6 +86,7 @@ def test_string_title_is_normalised():
 def test_list_title_is_preserved():
     data = valid_script()
     validate_script(data)
+
     assert data["title"] == ["Test Documentary"]
 
 
@@ -140,7 +145,10 @@ def test_missing_onscreen_title_gets_safe_fallback():
 
     validate_script(data)
 
-    assert data["scenes"][0]["onscreen_title"] == "This is a test narration"
+    assert (
+        data["scenes"][0]["onscreen_title"]
+        == "This is a test narration"
+    )
 
 
 def test_count_words():
@@ -189,7 +197,6 @@ def test_claims_to_verify_must_be_a_list():
 
 
 def test_visual_plan_accepts_different_subjects():
-    # Topic-specific plans can describe completely different subjects.
     space_plan = {
         "elements": [
             {"type": "circle", "x": 50, "y": 45, "size": 20},
@@ -202,6 +209,7 @@ def test_visual_plan_accepts_different_subjects():
             },
         ]
     }
+
     history_plan = {
         "elements": [
             {
@@ -256,8 +264,17 @@ def test_visual_plan_rejects_too_many_elements():
 
 
 def test_visual_plan_draws_on_frame():
-    frame = Image.new("RGB", (1080, 1920), (246, 237, 224))
-    result = render_visual_plan(frame, valid_visual_plan(), 1.0)
+    frame = Image.new(
+        "RGB",
+        (1080, 1920),
+        (246, 237, 224)
+    )
+
+    result = render_visual_plan(
+        frame,
+        valid_visual_plan(),
+        1.0
+    )
 
     assert result.size == (1080, 1920)
     assert result.mode == "RGB"
@@ -265,11 +282,23 @@ def test_visual_plan_draws_on_frame():
 
 
 def test_visual_plan_reveals_progressively():
-    frame = Image.new("RGB", (1080, 1920), (246, 237, 224))
+    frame = Image.new(
+        "RGB",
+        (1080, 1920),
+        (246, 237, 224)
+    )
     plan = valid_visual_plan()
 
-    early = render_visual_plan(frame.copy(), plan, 0.0)
-    late = render_visual_plan(frame.copy(), plan, 1.0)
+    early = render_visual_plan(
+        frame.copy(),
+        plan,
+        0.0
+    )
+    late = render_visual_plan(
+        frame.copy(),
+        plan,
+        1.0
+    )
 
     assert early.tobytes() != late.tobytes()
 
@@ -281,13 +310,149 @@ def test_missing_visual_plan_remains_compatible():
     validate_script(data)
 
 
+def test_underscore_asset_specification_is_parsed():
+    name, argument, position = parse_spec("prayer_mat@left")
+
+    assert name == "prayer_mat"
+    assert argument is None
+    assert position == "left"
+
+
+def test_all_registered_art_assets_can_be_built():
+    for name in sorted(ELEMENTS):
+        if name == "text":
+            spec = "text:TEST|SUBTITLE@center"
+        elif name == "figures":
+            spec = "figures:3"
+        elif name == "arches":
+            spec = "arches:3"
+        else:
+            spec = f"{name}@center"
+
+        image, position = make_element(spec)
+
+        assert image is not None
+        assert image.width > 0
+        assert image.height > 0
+        assert isinstance(position, tuple)
+        assert len(position) == 2
+
+
+def test_invalid_show_asset_is_rejected():
+    data = valid_script()
+    data["scenes"][0]["show"] = ["not_a_real_asset"]
+
+    with pytest.raises(ValueError, match="invalid illustration"):
+        validate_script(data)
+
+
+def test_duplicate_show_positions_are_rejected():
+    data = valid_script()
+    data["scenes"][0]["show"] = [
+        "book@left",
+        "map@left",
+    ]
+
+    with pytest.raises(ValueError, match="position"):
+        validate_script(data)
+
+
+def test_fixed_assets_must_be_used_alone():
+    data = valid_script()
+    data["scenes"][0]["show"] = [
+        "figures:3",
+        "book@right",
+    ]
+
+    with pytest.raises(ValueError, match="must be used on its own"):
+        validate_script(data)
+
+
+def test_figures_count_must_be_in_range():
+    data = valid_script()
+    data["scenes"][0]["show"] = ["figures:7"]
+
+    with pytest.raises(ValueError, match="between 1 and 6"):
+        validate_script(data)
+
+
+def test_text_illustration_is_validated():
+    data = valid_script()
+    data["scenes"][0]["show"] = [
+        "text:TEST|SUBTITLE@center"
+    ]
+
+    validate_script(data)
+
+    image, position = make_element(
+        "text:TEST|SUBTITLE@center"
+    )
+
+    assert image.width > 0
+    assert image.height > 0
+    assert isinstance(position, tuple)
+
+
+def test_scene_art_is_kept_separate():
+    scenes = [
+        {"show": ["book@left"]},
+        {"show": ["map@right"]},
+    ]
+
+    timeline = [
+        {"start": 1.2, "end": 5.0},
+        {"start": 5.0, "end": 9.0},
+    ]
+
+    result = build_legacy_art_elements(
+        scenes,
+        timeline
+    )
+
+    assert len(result) == 2
+    assert len(result[0]) == 1
+    assert len(result[1]) == 1
+
+    assert result[0][0]["show"] == pytest.approx(1.35)
+    assert result[1][0]["show"] == pytest.approx(5.15)
+
+    assert result[0][0]["x"] != result[1][0]["x"]
+
+
+def test_empty_scene_art_returns_empty_scene_list():
+    scenes = [{"show": []}]
+    timeline = [{"start": 1.2, "end": 5.0}]
+
+    result = build_legacy_art_elements(
+        scenes,
+        timeline
+    )
+
+    assert result == [[]]
+
+
+def test_scene_and_timeline_length_must_match():
+    with pytest.raises(ValueError, match="must match"):
+        build_legacy_art_elements(
+            [{"show": []}],
+            []
+        )
+
+
 def test_world_before_islam_script_exists():
     path = Path("scripts/world-before-islam.json")
 
     if not path.exists():
-        pytest.skip("Example script is not present in this checkout.")
+        pytest.skip(
+            "Example script is not present in this checkout."
+        )
 
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(
+        path.read_text(encoding="utf-8")
+    )
 
     assert data["scenes"]
-    assert all(scene.get("narration") for scene in data["scenes"])
+    assert all(
+        scene.get("narration")
+        for scene in data["scenes"]
+    )
